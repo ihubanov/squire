@@ -26,8 +26,6 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
-      # Trusted publishing needs npm 11.5.1 or newer.
-      - run: npm install -g npm@latest
       - name: Tag must match package.json
         run: |
           v=$(node -p "require('./package.json').version")
@@ -35,6 +33,10 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npm test
+      # Trusted publishing needs npm 11.5.1 or newer. Upgrade only now:
+      # npm 11 lays out the Appium packages differently and their types
+      # then clash, so install and build with Node 22's own npm.
+      - run: npm install -g npm@latest
       - run: npm publish --access public --ignore-scripts
       - name: GitHub release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes
