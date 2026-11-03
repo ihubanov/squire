@@ -57,9 +57,19 @@ clean → close the tabs you opened
 
    **Several Chrome profiles in one window.** Each profile has its own logins. When Chrome has more than one open, `playwright_list_tabs` groups the tabs by profile, and `playwright_new_tab` opens in the profile of the AI-active tab. To pick a profile, pass one of its tabs as `sameProfileAs`. A tab in the wrong profile shows a login wall instead of the user's account.
 
+   **The user's site is already open.** If one of the user's tabs already has the site, `playwright_new_tab` points you at it instead of opening another. Work in that tab when the user asked you to, or when they are clearly fine with it; it is logged in and in the right profile. Close only tabs you opened.
+
+   **Working in the same tab as the user.** You can act in the tab the user is looking at. Every tool result starts with what the user did in their browser since your last action (clicks, field changes, page loads). To hand a step to the user (log in, approve a 2FA prompt, choose something), ask them, then call `playwright_user_activity` with `waitSeconds` to see when and what they did.
+
    **Allow prompts.** With Chrome's remote-debugging toggle, Chrome asks the user to click Allow when Squire connects. Squire keeps one connection for its whole life, so this happens once, or again only if Chrome drops it. Tell the user before `create_session` that a prompt is coming.
 
 5. **Click like a person.** Use `playwright_run_script` click steps or `appium_click`: they send real mouse events at the element's centre. `element.click()` inside `playwright_evaluate` is an untrusted synthetic event that sites such as LinkedIn ignore. Find elements by visible text and role (`text=…`, ARIA roles), not by a site's CSS class names, which change without notice.
+
+   **Match exactly.** Pick elements by an exact accessible name (`[aria-label="Edit about"]`, an exact button text), not by a name that merely *contains* your words: a "Show credential" link can contain a certificate's name too, and clicking it leaves the site. Don't click a link that leads off the current site unless that is the task.
+
+   **Rich text boxes** (`contenteditable` divs such as profile headlines and "About" fields) are not inputs: `fill` and `el.focus()` from script often don't land. Click inside the box with a real click, check `document.activeElement` is the box, select all (Ctrl+A), delete, then type. Type multi-line text one line at a time with Enter between lines, and afterwards read the text back to check every line made it.
+
+   **Ask before saving anything public or irreversible** (posting, deleting, saving a profile change), unless the user already approved that kind of change. Leave settings such as "notify my network" as the user has them.
 
    **Checking for an open dialog in `playwright_evaluate`:** many confirmations ("Delete post?") are native `<dialog>` elements shown in the top layer, and `offsetParent` is `null` for those even when they are on screen. Look for `dialog[open]`, `:modal` and `[role=dialog]`/`[role=alertdialog]`, and test visibility with `el.checkVisibility()` or a non-zero `getBoundingClientRect()`, never `offsetParent`.
 

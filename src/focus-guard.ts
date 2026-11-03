@@ -12,8 +12,10 @@
  * user to protect, and the active tab of a headed browser is always
  * "visible", so guarding it would just lock the AI out of its own browser.
  *
- * Disable the guard entirely with APPIUM_MCP_RESPECT_USER_FOCUS=false
- * (escape hatch if it ever gets in the way; default is enabled).
+ * Off by default: a user working alongside the AI wants it in the tab they
+ * are looking at (and a tab Squire opens comes to the front anyway).
+ * Shared-screen setups where the AI must keep out of the watched tab turn
+ * it on with APPIUM_MCP_RESPECT_USER_FOCUS=true.
  */
 import type { BrowserContext, Page } from 'playwright';
 
@@ -34,10 +36,10 @@ function isSharedWithUser(page: Page): boolean {
 }
 
 function isEnabled(): boolean {
-  const v = (process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] ?? 'true')
+  const v = (process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] ?? '')
     .trim()
     .toLowerCase();
-  return v !== 'false' && v !== '0';
+  return v === 'true' || v === '1';
 }
 
 /**

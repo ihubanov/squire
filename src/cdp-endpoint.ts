@@ -63,6 +63,23 @@ export async function resolveCdpEndpoint(
   return endpoint;
 }
 
+/** The browser's WebSocket URL for an endpoint from resolveCdpEndpoint. */
+export async function toBrowserWebSocketUrl(endpoint: string): Promise<string> {
+  if (/^wss?:\/\//i.test(endpoint)) return endpoint;
+  const res = await fetch(new URL('/json/version', endpoint), {
+    signal: AbortSignal.timeout(5000),
+  });
+  const { webSocketDebuggerUrl } = (await res.json()) as { webSocketDebuggerUrl?: string };
+  if (!webSocketDebuggerUrl) throw new Error(`${endpoint} gave no webSocketDebuggerUrl`);
+  // Chrome reports its own idea of the host; keep the one we were given.
+  const ws = new URL(webSocketDebuggerUrl);
+  ws.host = new URL(endpoint).host;
+  return ws.toString();
+}
+
+/** Prefix for an attach that got past Allow but failed afterwards. */
+export const ACCEPTED_PREFIX = 'Chrome accepted the connection, but';
+
 /**
  * A one-line reason for a failed attach that tells the user what to do.
  * `resolved` is what resolveCdpEndpoint returned for `endpoint`.
@@ -74,6 +91,7 @@ export function explainAttachError(
   timeoutMs: number
 ): string {
   const msg = err.message;
+  if (msg.startsWith(ACCEPTED_PREFIX)) return msg.split('\n')[0];
   if (/ECONNREFUSED/.test(msg)) {
     if (resolved !== endpoint) {
       return `Chrome's remote debugging is off (DevToolsActivePort is left over from when it was on). Turn on "Allow remote debugging" at chrome://inspect/#remote-debugging.`;

@@ -24,9 +24,16 @@ import {
   explainAttachError,
   profileDirForPort,
   openProfileNames,
+  toBrowserWebSocketUrl,
+  ACCEPTED_PREFIX,
 } from '../../cdp-endpoint.js';
-import { getUserBrowser } from '../../cdp-connection.js';
+import {
+  getRelay,
+  getUserBrowser,
+  acquireUserBrowser,
+} from '../../cdp-connection.js';
 import { countProfiles } from '../../user-profiles.js';
+import { watchUserActivity } from '../../user-activity.js';
 import log from '../../logger.js';
 import {
   createUIResource,
@@ -300,6 +307,8 @@ export interface WebSessionOptions {
 
 /** Long enough for a person to find Chrome's Allow prompt and click it. */
 const CDP_CONNECT_TIMEOUT_MS = 90_000;
+/** Playwright's setup over the already-open connection. */
+const CDP_SETUP_TIMEOUT_MS = 60_000;
 
 /** Open a Playwright browser and make it the active session. */
 export async function openWebSession(opts: WebSessionOptions) {
@@ -362,21 +371,32 @@ export async function openWebSession(opts: WebSessionOptions) {
     try {
       wsOrHttp = await resolveCdpEndpoint(cdpEndpoint);
       // Chrome's remote-debugging toggle asks the user to approve each new
-      // connection, so all sessions share one (see cdp-connection.ts).
-      const waiting = setTimeout(() => {
-        opts.onWaiting?.(
-          'Waiting for you to click Allow in Chrome (the remote-debugging prompt may be in another Chrome window).'
-        );
-      }, 3000);
+      // connection, so Squire holds one and all sessions share it
+      // (cdp-connection.ts, cdp-proxy.ts).
+      const { relay, fresh } = await getRelay(
+        await toBrowserWebSocketUrl(wsOrHttp),
+        CDP_CONNECT_TIMEOUT_MS,
+        () =>
+          opts.onWaiting?.(
+            'Waiting for you to click Allow in Chrome (the remote-debugging prompt may be in another Chrome window).'
+          )
+      );
       let b: import('playwright').Browser;
-      let reused: boolean;
       try {
-        ({ browser: b, reused } = await getUserBrowser(wsOrHttp, (ep) =>
-          chromium.connectOverCDP(ep, { timeout: CDP_CONNECT_TIMEOUT_MS })
+        ({ browser: b } = await getUserBrowser(relay.url, (ep) =>
+          chromium.connectOverCDP(ep, { timeout: CDP_SETUP_TIMEOUT_MS })
         ));
-      } finally {
-        clearTimeout(waiting);
+      } catch (e) {
+        throw new Error(
+          `${ACCEPTED_PREFIX} setting up its tabs failed (${(e as Error).message.split('\n')[0]}).` +
+            (relay.stuckTargets.size
+              ? ` ${relay.stuckTargets.size} tab(s) did not respond and were skipped.`
+              : '') +
+            ' Set APPIUM_MCP_CDP_TRACE=<file> to log the CDP traffic.'
+        );
       }
+      const reused = !fresh;
+      acquireUserBrowser();
       const contexts = b.contexts();
       // viewport:null and no userAgent override — the user's real
       // Chrome already sends a correct, self-consistent UA + client
@@ -394,6 +414,9 @@ export async function openWebSession(opts: WebSessionOptions) {
       // This browser is the user's own window — enable the
       // focus/protected-tab guards for it.
       markSharedWithUser(ctx);
+      // Report what the user does in their tabs, so the AI and the user
+      // can work in the same tab.
+      await watchUserActivity(ctx);
       const existing = ctx.pages();
       // Edge case when no pages exist: a Chromium with zero pages.
       // Open one so the driver isn't broken; this is the only time
@@ -418,13 +441,19 @@ export async function openWebSession(opts: WebSessionOptions) {
         const dir = port ? await profileDirForPort(port) : undefined;
         const names = dir ? await openProfileNames(dir) : [];
         const profiles = await countProfiles(b);
-        attachedInfo =
+        attachedInfo = [
           `Chrome ${b.version()}` +
-          (names.length ? `, profiles open: ${names.join(', ')}` : '') +
-          (profiles > 1
-            ? `. Tabs are in ${profiles} profiles: playwright_list_tabs groups them, and playwright_new_tab opens in the profile of the AI-active tab (or pass sameProfileAs).`
-            : '') +
-          (reused ? '. Reused the existing connection, no Allow prompt.' : '');
+            (names.length ? `, profiles open: ${names.join(', ')}` : ''),
+          profiles > 1
+            ? `Tabs are in ${profiles} profiles: playwright_list_tabs groups them, and playwright_new_tab opens in the profile of the AI-active tab (or pass sameProfileAs)`
+            : '',
+          relay.stuckTargets.size
+            ? `${relay.stuckTargets.size} tab(s) or frame(s) did not respond during setup (often tabs Chrome has frozen); playwright_list_tabs marks them "(not responding)"`
+            : '',
+          reused ? 'Reused the existing connection, no Allow prompt' : '',
+        ]
+          .filter(Boolean)
+          .join('. ') + '.';
       } catch { /* description only */ }
     } catch (e) {
       const reason = explainAttachError(

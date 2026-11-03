@@ -82,7 +82,15 @@ describe('focus guard scoping', () => {
     await expect(assertNotUserFocused(page, 'click on')).resolves.toBeUndefined();
   });
 
-  test('guards a visible tab in a user-shared (CDP-attached) browser', async () => {
+  test('by default lets the AI work in the tab the user is looking at', async () => {
+    const context = {};
+    markSharedWithUser(context as any);
+    const page = makeMockPage({ visible: true, context });
+    await expect(assertNotUserFocused(page, 'click on')).resolves.toBeUndefined();
+  });
+
+  test('with APPIUM_MCP_RESPECT_USER_FOCUS=true, guards a visible tab in a user-shared browser', async () => {
+    process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] = 'true';
     const context = {};
     markSharedWithUser(context as any);
     const page = makeMockPage({ visible: true, context });
@@ -92,6 +100,7 @@ describe('focus guard scoping', () => {
   });
 
   test('allows a background tab in a user-shared browser', async () => {
+    process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] = 'true';
     const context = {};
     markSharedWithUser(context as any);
     const page = makeMockPage({ visible: false, context });

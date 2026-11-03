@@ -8,7 +8,7 @@
  *  - without the flag, the historical fallback behavior is preserved
  *    (attach failure → detached launch attempt)
  *
- * Playwright is mocked: connectOverCDP simulates a dead gate; launch is
+ * Playwright is mocked and the endpoint is dead (nothing listens); launch is
  * a sentinel that throws — proving the fallback path was ENTERED without
  * spawning a real browser.
  */
@@ -114,7 +114,9 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
     await expect(
       cfg.execute({ platform: 'web', browser: 'chromium', headless: true }, {})
     ).rejects.toThrow(/NOT falling back to a detached launch/);
-    expect(connectOverCDP).toHaveBeenCalledTimes(1);
+    // The dead endpoint is refused when Squire opens its own connection,
+    // before Playwright is involved.
+    expect(connectOverCDP).not.toHaveBeenCalled();
     expect(launch).not.toHaveBeenCalled();
   });
 
@@ -140,7 +142,9 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
     await expect(
       cfg.execute({ platform: 'web', browser: 'chromium', headless: true }, {})
     ).rejects.toThrow(/launch sentinel/);
-    expect(connectOverCDP).toHaveBeenCalledTimes(1);
+    // The dead endpoint is refused when Squire opens its own connection,
+    // before Playwright is involved.
+    expect(connectOverCDP).not.toHaveBeenCalled();
     expect(launch).toHaveBeenCalled();
   });
 

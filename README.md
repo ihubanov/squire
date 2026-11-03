@@ -29,7 +29,7 @@ This installs the web-driving and presenting skills, the `browser-driver` and `p
 ```bash
 npx @sniffski/squire          # stdio MCP server
 ```
-Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222`, or turn on "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`, and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`. The toggle has no `/json` discovery, so Squire reads the browser's WebSocket URL from `DevToolsActivePort` in the Chrome profile directory, and Chrome asks you to click Allow when Squire connects. Squire keeps that one connection for as long as it runs, so you are asked once. With several Chrome profiles open, tabs are listed by profile and new tabs open in the profile of the tab Squire is working in.
+Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222`, or turn on "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`, and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`. The toggle has no `/json` discovery, so Squire reads the browser's WebSocket URL from `DevToolsActivePort` in the Chrome profile directory, and Chrome asks you to click Allow when Squire connects. Squire holds that one connection and every session shares it, so you are asked once; it closes the connection after 10 minutes with no session (`APPIUM_MCP_CDP_IDLE_MS`). With several Chrome profiles open, tabs are listed by profile and new tabs open in the profile of the tab Squire is working in.
 
 ## Quick start
 
@@ -46,9 +46,11 @@ To have Squire work in your own Chrome, turn on remote debugging at `chrome://in
 | Var | Purpose |
 |-----|---------|
 | `APPIUM_MCP_CDP_ENDPOINT` | Attach to a running Chrome (e.g. `http://localhost:9222`). Unset → launches its own detached browser. |
-| `APPIUM_MCP_CDP_KEEP_CONNECTION` | `0` → disconnect from the user's Chrome on `delete_session` instead of keeping the connection (each reconnect is a new Allow prompt). |
+| `APPIUM_MCP_CDP_IDLE_MS` | How long to keep the connection to the user's Chrome after the last session ends (default 600000 = 10 min). Each new connection is a new Allow prompt. |
+| `APPIUM_MCP_CDP_KEEP_CONNECTION` | `0` → disconnect from the user's Chrome as soon as the last session ends. |
+| `APPIUM_MCP_CDP_TRACE` | File to log CDP method names to, for debugging an attach. |
 | `APPIUM_MCP_CHROME_PROFILE_DIR` | Chrome profile directory to read `DevToolsActivePort` from, when it isn't the default Chrome/Chromium one. |
-| `APPIUM_MCP_RESPECT_USER_FOCUS` | `false` to let the AI act on the focused tab (default guards it). |
+| `APPIUM_MCP_RESPECT_USER_FOCUS` | `true` to stop the AI acting on the tab the user is looking at (for shared screens). Default off, so you and the AI can work in the same tab. |
 | `APPIUM_MCP_VISION_MODEL` / `APPIUM_MCP_VISION_PYTHON` | Enable the ONNX icon detector (path to the `.onnx` + a Python with `onnxruntime`). OCR text grounding works without them. |
 
 ## Credits and license

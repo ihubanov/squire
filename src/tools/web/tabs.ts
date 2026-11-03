@@ -10,11 +10,24 @@ import { writeAiActiveTab } from '../../ai-state.js';
 import { logActivity } from '../../activity-log.js';
 import type { PlaywrightDriver } from '../../playwright-adapter.js';
 import {
+  takeUserEvents,
+  waitForUserEvent,
+  formatUserEvents,
+} from '../../user-activity.js';
+import {
   countProfiles,
   openTabInProfileOf,
   pageProfileId,
   profileLabels,
 } from '../../user-profiles.js';
+
+/** `p`, or `fallback` if it fails or takes longer than `ms`. */
+function within<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    p.catch(() => fallback),
+    new Promise<T>((r) => setTimeout(() => r(fallback), ms).unref()),
+  ]);
+}
 
 /** A tab given as an index or a stable tab id. */
 function findTab(
@@ -95,6 +108,12 @@ export function newTab(server: FastMCP): void {
       .describe(
         'Attached to the user\'s Chrome only: open the tab in the same Chrome profile, with the same logins, as this tab (index or tab id from playwright_list_tabs). When Chrome has several profiles open the default is the profile of the AI-active tab.',
       ),
+    evenIfOpen: z
+      .boolean()
+      .optional()
+      .describe(
+        'Attached to the user\'s Chrome only: open a new tab even when one of the user\'s tabs already has this site open. By default no tab is opened and you are pointed at the existing one, because users prefer you work in the tab they already have (logged in, right profile).',
+      ),
   });
 
   server.addTool({
@@ -119,6 +138,30 @@ export function newTab(server: FastMCP): void {
 
       try {
         const wantBackground = args.bringToFront !== true;
+
+        // The user already has this site open: use that tab, it is in the
+        // right profile and logged in. Point there instead of opening one.
+        if (driver.attachedToUserBrowser && args.url && !args.evenIfOpen && args.sameProfileAs === undefined) {
+          let host = '';
+          try { host = new URL(args.url).hostname.replace(/^www\./, ''); } catch { /* not a URL */ }
+          const pages = driver.context.pages();
+          const at = host
+            ? pages.findIndex((p) => {
+                try { return new URL(p.url()).hostname.replace(/^www\./, '') === host; } catch { return false; }
+              })
+            : -1;
+          if (at >= 0) {
+            return {
+              content: [{
+                type: 'text',
+                text: `No tab opened: the user's tab ${at} [${driver.getTabId(pages[at])}] already has ${host} open (${pages[at].url()}). ` +
+                  `Work in it: playwright_switch_tab ${at}, then navigate within it, if the task is in that site and the user is fine with you using their tab. ` +
+                  `If you need a separate tab, call playwright_new_tab again with evenIfOpen: true (add sameProfileAs: ${at} to keep that tab's logins).`,
+              }],
+            };
+          }
+        }
+
         const inProfile = await openInProfile(driver, args.sameProfileAs);
         let page: import('playwright').Page;
 
@@ -292,11 +335,13 @@ export function listTabs(server: FastMCP): void {
 
         const tabInfo = await Promise.all(
           pages.map(async (page, index) => {
-            const title = await page.title();
+            // A tab Chrome has frozen never answers; don't let it hang the list.
+            const title = await within<string | null>(page.title(), 2000, null);
             const url = page.url();
             const id = driver.getTabId(page);
             const isActive = page === currentPage ? ' (active)' : '';
-            return `  ${index}. [${id}] ${title || '(no title)'} - ${url}${isActive}`;
+            const shown = title === null ? '(not responding)' : title || '(no title)';
+            return `  ${index}. [${id}] ${shown} - ${url}${isActive}`;
           })
         );
 
@@ -305,7 +350,7 @@ export function listTabs(server: FastMCP): void {
         let listing = tabInfo.join('\n');
         if (driver.attachedToUserBrowser && pages.length > 1) {
           const ids = await Promise.all(
-            pages.map((p) => pageProfileId(driver.context, p))
+            pages.map((p) => within(pageProfileId(driver.context, p), 2000, undefined))
           );
           const labels = profileLabels(ids);
           if (labels.size > 1) {
@@ -419,6 +464,37 @@ export function closeTab(server: FastMCP): void {
           ],
         };
       }
+    },
+  });
+}
+
+export function userActivity(server: FastMCP): void {
+  const schema = z.object({
+    waitSeconds: z
+      .number()
+      .min(0)
+      .max(600)
+      .optional()
+      .describe('Wait up to this long for the user to do something (returns as soon as they do). Default 0: just report.'),
+  });
+  server.addTool({
+    name: 'playwright_user_activity',
+    description:
+      "What the user did in their own browser (clicks, field changes, Enter, form submits, page loads, new tabs) since you last looked. Attached to the user's Chrome only. Use it to work together in one tab: ask the user to do a step (log in, pick something, approve a 2FA prompt), then call this with waitSeconds to see when and what they did. Every other tool result also starts with this report when there is something new. Password and card fields never show values.",
+    parameters: schema,
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    execute: async (args: z.infer<typeof schema>): Promise<ContentResult> => {
+      const driver = getDriver();
+      if (!driver || !isPlaywrightDriverSession(driver) || !driver.attachedToUserBrowser) {
+        throw new Error("Only available when attached to the user's Chrome (APPIUM_MCP_CDP_ENDPOINT).");
+      }
+      if (args.waitSeconds) await waitForUserEvent(args.waitSeconds * 1000);
+      // Let a burst of events (click, then page load) arrive together.
+      await new Promise((r) => setTimeout(r, 300));
+      const seen = takeUserEvents();
+      return {
+        content: [{ type: 'text', text: formatUserEvents(seen) || 'The user has not done anything in their browser since your last action.' }],
+      };
     },
   });
 }

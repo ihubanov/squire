@@ -15,6 +15,12 @@
 import { FastMCP } from 'fastmcp';
 import log from '../logger.js';
 import { touchActiveSession } from '../session-store.js';
+import {
+  beginAction,
+  endAction,
+  takeUserEvents,
+  formatUserEvents,
+} from '../user-activity.js';
 import answerAppium from './documentation/answer-appium.js';
 import createSession from './session/create-session.js';
 import deleteSession from './session/delete-session.js';
@@ -67,7 +73,7 @@ import runScriptTool from './web/run-script.js';
 import present from './web/present.js';
 import selectOption from './web/select-option.js';
 import hover from './web/hover.js';
-import { newTab, switchTab, listTabs, closeTab } from './web/tabs.js';
+import { newTab, switchTab, listTabs, closeTab, userActivity } from './web/tabs.js';
 import { type as playwrightType, pressKey as playwrightPressKey } from './web/keyboard.js';
 import getUrl from './web/get-url.js';
 
@@ -148,10 +154,28 @@ export default function registerTools(server: FastMCP): void {
         // Keep the active session's idle clock fresh so the reaper only
         // closes browsers/drivers that are genuinely unused.
         try { touchActiveSession(); } catch { /* no active session yet */ }
+        // What this tool does in the user's browser is not the user's activity.
+        const bracket = toolName !== 'playwright_user_activity';
         try {
-          const result = await originalExecute(args, context);
+          if (bracket) beginAction();
+          let result;
+          try {
+            result = await originalExecute(args, context);
+          } finally {
+            if (bracket) endAction();
+          }
           const duration = Date.now() - start;
           log.info(`[TOOL END] ${toolName} (${duration}ms)`);
+          // Tell the AI what the user did in their browser meanwhile.
+          if (bracket && Array.isArray(result?.content)) {
+            const seen = takeUserEvents();
+            if (seen.length) {
+              result = {
+                ...result,
+                content: [{ type: 'text', text: formatUserEvents(seen) }, ...result.content],
+              };
+            }
+          }
           return result;
         } catch (err: any) {
           const duration = Date.now() - start;
@@ -251,6 +275,7 @@ export default function registerTools(server: FastMCP): void {
   newTab(server);
   switchTab(server);
   listTabs(server);
+  userActivity(server);
   closeTab(server);
   playwrightType(server);
   playwrightPressKey(server);
