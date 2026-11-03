@@ -75,7 +75,9 @@ clean → close the tabs you opened
 
 ## Step vocabulary for run_script
 
-`fill`, `type`, `click`, `hover`, `select`, `scrollTo`, `press` (with `key`), `reveal` (force-unhide a selector), `wait` (with `ms`, or `waitFor: load|domcontentloaded|networkidle|navigation`), `eval` (with `script`). Selectors are CSS by default; `xpath=…` and `text=…` prefixes work too.
+`fill`, `type`, `click`, `hover`, `select`, `scrollTo`, `press` (with `key`), `reveal` (force-unhide a selector), `wait` (with `ms`, or `waitFor: load|domcontentloaded|networkidle|navigation`), `eval` (with `script`), `upload` (with `files`: absolute paths). Selectors are CSS by default; `xpath=…` and `text=…` prefixes work too.
+
+**Uploading a file** (an avatar, a thumbnail, an attachment): one `upload` step, never a native file dialog. Point its selector at the `<input type=file>` (hidden is fine) or at the button that opens the picker; Squire catches the picker so no OS dialog appears. Scope the selector to the open dialog (`[role=dialog] input[type=file]`): sites such as LinkedIn leave stale hidden file inputs elsewhere on the page, and the step tells you when more than one element matched.
 
 ## When the DOM has nothing: the vision rung
 

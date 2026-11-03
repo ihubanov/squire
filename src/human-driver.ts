@@ -25,6 +25,8 @@
  * sequence that has already gone off the rails.
  */
 import type { Page } from 'playwright';
+import { stat } from 'node:fs/promises';
+import { isAbsolute } from 'node:path';
 import { assertNotProtected } from './protected-urls.js';
 import { assertNotUserFocused } from './focus-guard.js';
 import { groundLabelOnPage } from './vision-grounding.js';
@@ -41,7 +43,8 @@ export interface Step {
     | 'scrollTo'
     | 'reveal'
     | 'wait'
-    | 'eval';
+    | 'eval'
+    | 'upload';
   /** CSS by default; also accepts Playwright's `xpath=…` / `text=…` prefixes. */
   selector?: string;
   /** Text to fill/type. */
@@ -56,6 +59,8 @@ export interface Step {
   waitFor?: 'load' | 'domcontentloaded' | 'networkidle' | 'navigation';
   /** JavaScript body for `eval`. */
   script?: string;
+  /** Absolute paths of the files for `upload`. */
+  files?: string[];
   /**
    * Visible label to look for ON SCREEN (OCR/vision grounding) when DOM
    * selectors fail — for canvas, WebGL, embedded viewers, images. E.g.
@@ -187,6 +192,9 @@ export async function runScript(
           }
           break;
         }
+        case 'upload':
+          res.detail = await upload(page, step, timeout);
+          break;
         default:
           res.via = await runActionable(page, step, humanize, timeout);
       }
@@ -245,6 +253,104 @@ export async function runScript(
     finished: true,
     finalUrl: safeUrl(page),
   };
+}
+
+/**
+ * Put files into a file input. The selector may point at the
+ * `<input type=file>` itself (hidden ones are fine) or at the button that
+ * opens the file picker; for a button the picker is intercepted, so no
+ * native dialog appears. If Playwright cannot set the files (seen on some
+ * attached browsers) it falls back to CDP DOM.setFileInputFiles.
+ */
+async function upload(
+  page: Page,
+  step: Step,
+  timeout: number
+): Promise<string> {
+  const sel = step.selector;
+  if (!sel) {
+    throw new Error('upload step requires a selector');
+  }
+  const files = step.files ?? [];
+  if (!files.length) {
+    throw new Error('upload step requires `files` (absolute paths)');
+  }
+  for (const f of files) {
+    if (!isAbsolute(f)) {
+      throw new Error(`upload: "${f}" is not an absolute path`);
+    }
+    const st = await stat(f).catch(() => undefined);
+    if (!st?.isFile()) {
+      throw new Error(`upload: "${f}" does not exist or is not a file`);
+    }
+  }
+  const all = page.locator(sel);
+  const count = await all.count();
+  const locator = all.first();
+  const isFileInput = await locator
+    .evaluate(
+      (el) => el instanceof HTMLInputElement && el.type === 'file',
+      undefined,
+      { timeout }
+    )
+    .catch(() => false);
+  const note =
+    count > 1
+      ? ` (${count} elements matched; used the first, scope the selector if that was the wrong one)`
+      : '';
+  const what = `${files.length} file${files.length > 1 ? 's' : ''}`;
+
+  if (!isFileInput) {
+    // A button that opens the file picker: take the picker instead.
+    const [chooser] = await Promise.all([
+      page.waitForEvent('filechooser', { timeout }),
+      locator.click({ timeout }),
+    ]);
+    await chooser.setFiles(files, { timeout });
+    return `set ${what} through the file picker${note}`;
+  }
+  try {
+    await locator.setInputFiles(files, { timeout });
+    return `set ${what} on the file input${note}`;
+  } catch (err) {
+    if (looksLikeNavigation(err)) {
+      throw err;
+    }
+    await setFilesViaCdp(page, locator, files);
+    return `set ${what} on the file input via CDP${note}`;
+  }
+}
+
+async function setFilesViaCdp(
+  page: Page,
+  locator: ReturnType<Page['locator']>,
+  files: string[]
+): Promise<void> {
+  const mark = `squire-upload-${Date.now()}`;
+  await locator.evaluate(
+    (el, m) => el.setAttribute('data-squire-upload', m),
+    mark
+  );
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    const { result } = (await cdp.send('Runtime.evaluate', {
+      expression: `document.querySelector('[data-squire-upload="${mark}"]')`,
+    })) as { result: { objectId?: string } };
+    if (!result.objectId) {
+      throw new Error(
+        'upload: could not reach the file input over CDP (is it inside an iframe?)'
+      );
+    }
+    await cdp.send('DOM.setFileInputFiles', {
+      files,
+      objectId: result.objectId,
+    });
+  } finally {
+    await locator
+      .evaluate((el) => el.removeAttribute('data-squire-upload'))
+      .catch(() => {});
+    await cdp.detach().catch(() => {});
+  }
 }
 
 /**

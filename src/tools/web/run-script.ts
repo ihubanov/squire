@@ -34,6 +34,7 @@ const stepSchema = z.object({
     'reveal',
     'wait',
     'eval',
+    'upload',
   ]),
   selector: z
     .string()
@@ -53,6 +54,14 @@ const stepSchema = z.object({
     .optional()
     .describe('Page state / navigation to await for a wait step.'),
   script: z.string().optional().describe('JavaScript body for an eval step.'),
+  files: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Absolute paths of local files for an upload step. Its selector may be the ' +
+        '<input type=file> (hidden is fine) or the button that opens the file picker; ' +
+        'scope it to the open dialog, since some sites leave stale file inputs elsewhere.'
+    ),
   visual: z
     .string()
     .optional()
@@ -126,7 +135,8 @@ export default function runScriptTool(server: FastMCP): void {
       'useful for modals/menus that a plain click cannot reach. Returns per-step results; on a ' +
       'failing step it stops and hands back a `continuationId` you can pass as `resume` to pick up ' +
       'where it left off after you adjust. Prefer this over chaining many single-action tools when ' +
-      'a flow (login, multi-field form, open-menu-then-click) should run as one human-like unit.',
+      'a flow (login, multi-field form, open-menu-then-click) should run as one human-like unit. ' +
+      'An upload step puts local files into a file input or the file picker a button opens.',
     parameters: schema,
     annotations: {
       readOnlyHint: false,
