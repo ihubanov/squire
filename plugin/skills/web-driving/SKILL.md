@@ -61,6 +61,8 @@ clean → close the tabs you opened
 
 5. **Click like a person.** Use `playwright_run_script` click steps or `appium_click`: they send real mouse events at the element's centre. `element.click()` inside `playwright_evaluate` is an untrusted synthetic event that sites such as LinkedIn ignore. Find elements by visible text and role (`text=…`, ARIA roles), not by a site's CSS class names, which change without notice.
 
+   **Checking for an open dialog in `playwright_evaluate`:** many confirmations ("Delete post?") are native `<dialog>` elements shown in the top layer, and `offsetParent` is `null` for those even when they are on screen. Look for `dialog[open]`, `:modal` and `[role=dialog]`/`[role=alertdialog]`, and test visibility with `el.checkVisibility()` or a non-zero `getBoundingClientRect()`, never `offsetParent`.
+
 ## Step vocabulary for run_script
 
 `fill`, `type`, `click`, `hover`, `select`, `scrollTo`, `press` (with `key`), `reveal` (force-unhide a selector), `wait` (with `ms`, or `waitFor: load|domcontentloaded|networkidle|navigation`), `eval` (with `script`). Selectors are CSS by default; `xpath=…` and `text=…` prefixes work too.
