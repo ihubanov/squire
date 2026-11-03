@@ -1,4 +1,4 @@
-import { FastMCP } from 'fastmcp';
+import type { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 
 export default function generateTest(server: FastMCP): void {

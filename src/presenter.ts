@@ -92,44 +92,6 @@ const DEMO_HOLD_MS = 5000;
 /** The cursor glides over in the last part of the hold. */
 const CURSOR_GLIDE_MS = 1200;
 
-/** Plain CSS the overlay can re-query itself after a re-render. */
-function cssOnly(selector?: string): string | null {
-  if (!selector) return null;
-  if (/^(xpath|text|css|id|data-testid|role)=/i.test(selector)) return null;
-  if (selector.includes('>>')) return null;
-  return selector;
-}
-
-/** Password, payment and one-time-code fields are never typed into. */
-async function isSensitive(handle: ElementHandle<Element>): Promise<boolean> {
-  return handle
-    .evaluate((e: any) => {
-      const t = String(e.type ?? '').toLowerCase();
-      const ac = String(e.autocomplete ?? '').toLowerCase();
-      return (
-        t === 'password' ||
-        ac.includes('password') ||
-        ac.startsWith('cc-') ||
-        ac === 'one-time-code'
-      );
-    })
-    .catch(() => false);
-}
-
-function defaultAdvance(step: PresentStep): Advance {
-  if (step.advance) return step.advance;
-  switch (step.action) {
-    case 'click':
-      return 'click';
-    case 'fill':
-    case 'type':
-    case 'select':
-      return 'input';
-    default:
-      return 'next';
-  }
-}
-
 export class Tour {
   private index = 0;
   private shownIndex = -1;
@@ -153,7 +115,9 @@ export class Tour {
     readonly mode: PresentMode = 'guided',
     readonly accent?: string
   ) {
-    if (steps.length === 0) throw new Error('A tour needs at least one step.');
+    if (steps.length === 0) {
+      throw new Error('A tour needs at least one step.');
+    }
   }
 
   /**
@@ -178,20 +142,28 @@ export class Tour {
       }
 
       if (this.mode === 'demo' && !this.handedToUser.has(i)) {
-        if (await this.userStopped()) break;
+        if (await this.userStopped()) {
+          break;
+        }
         const ok = await this.demoStep(i, step);
         if (!ok) {
           this.failed = true;
           return this.status(false);
         }
-        if (this.stopped) break;
-        if (this.handedToUser.has(i)) continue; // re-show as a guided step
+        if (this.stopped) {
+          break;
+        }
+        if (this.handedToUser.has(i)) {
+          continue;
+        } // re-show as a guided step
         this.index++;
         continue;
       }
 
       const outcome = await this.waitForPerson(deadline - Date.now(), onTick);
-      if (outcome.kind === 'timeout') return this.status(true);
+      if (outcome.kind === 'timeout') {
+        return this.status(true);
+      }
       if (outcome.kind === 'closed') {
         this.stopped = true;
         break;
@@ -213,7 +185,9 @@ export class Tour {
           break;
         }
       }
-      if (this.stopped) break;
+      if (this.stopped) {
+        break;
+      }
       const ev = outcome.events[0]!;
       if (ev.type === 'back') {
         if (i > 0 && this.navigated.has(i - 1)) {
@@ -284,12 +258,16 @@ export class Tour {
   }
 
   private async evalOverlay(fn: () => unknown): Promise<void> {
-    if (this.page.isClosed()) return;
+    if (this.page.isClosed()) {
+      return;
+    }
     await this.page.evaluate(fn).catch(() => {});
   }
 
   private async overlayAlive(): Promise<boolean> {
-    if (this.page.isClosed()) return false;
+    if (this.page.isClosed()) {
+      return false;
+    }
     return this.page
       .evaluate(() => !!(window as any).__squirePresenter?.host?.isConnected)
       .catch(() => false);
@@ -326,14 +304,18 @@ export class Tour {
         handle = null;
       }
     }
-    if (handle) return { handle, rect: null };
+    if (handle) {
+      return { handle, rect: null };
+    }
     if (step.visual) {
       // The overlay must not be in the screenshot we ground against.
       await this.evalOverlay(() => (window as any).__squirePresenter?.hide());
       const region = await groundLabelOnPage(this.page, step.visual).catch(
         () => null
       );
-      if (region) return { handle: null, rect: region };
+      if (region) {
+        return { handle: null, rect: region };
+      }
     }
     return { handle: null, rect: null };
   }
@@ -348,7 +330,9 @@ export class Tour {
         await this.showStepOnce(i);
         return;
       } catch (err) {
-        if (attempt >= 3 || this.page.isClosed()) throw err;
+        if (attempt >= 3 || this.page.isClosed()) {
+          throw err;
+        }
         await this.page
           .waitForLoadState('domcontentloaded', { timeout: 10_000 })
           .catch(() => {});
@@ -439,31 +423,43 @@ export class Tour {
    */
   private async performOnNext(i: number, step: PresentStep): Promise<void> {
     const action = step.action ?? 'none';
-    if (action === 'none') return;
+    if (action === 'none') {
+      return;
+    }
     const handle = this.target.handle;
-    if (this.page.isClosed() || this.page.url() !== this.stepUrls[i]) return;
+    if (this.page.isClosed() || this.page.url() !== this.stepUrls[i]) {
+      return;
+    }
     const touched = await this.page
       .evaluate(() => !!(window as any).__squirePresenter?.touched)
       .catch(() => false);
-    if (touched) return;
+    if (touched) {
+      return;
+    }
     if (handle) {
       if (action === 'fill' || action === 'type' || action === 'select') {
         const now = await handle
           .evaluate((e: any) => ('value' in e ? String(e.value) : null))
           .catch(() => null);
-        if (now !== this.shownValue) return;
+        if (now !== this.shownValue) {
+          return;
+        }
       }
       if (
         (action === 'fill' || action === 'type') &&
         (await isSensitive(handle))
       ) {
         const r = this.results.get(i);
-        if (r) r.detail = 'sensitive field — left for the person, not typed';
+        if (r) {
+          r.detail = 'sensitive field — left for the person, not typed';
+        }
         return;
       }
     }
     const pt = await this.targetPoint();
-    if (!handle && !pt) return;
+    if (!handle && !pt) {
+      return;
+    }
     if (pt) {
       await this.page
         .evaluate(
@@ -478,11 +474,14 @@ export class Tour {
       // Commit the edit now, so its change event can't count for the next step.
       await handle?.evaluate((e: any) => e.blur?.()).catch(() => {});
       const r = this.results.get(i);
-      if (r) r.detail = 'Squire did this step when Next was pressed';
+      if (r) {
+        r.detail = 'Squire did this step when Next was pressed';
+      }
     } catch (err: any) {
       const r = this.results.get(i);
-      if (r)
+      if (r) {
         r.detail = `Next: couldn't ${action}: ${String(err?.message ?? err).split('\n')[0]}`;
+      }
       return;
     }
     if (!this.page.isClosed() && this.page.url() !== before) {
@@ -494,7 +493,9 @@ export class Tour {
   private async targetPoint(): Promise<{ x: number; y: number } | null> {
     if (this.target.handle) {
       const box = await this.target.handle.boundingBox().catch(() => null);
-      if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      if (box) {
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      }
     }
     if (this.target.rect) {
       const r = this.target.rect;
@@ -517,9 +518,10 @@ export class Tour {
         this.handedToUser.add(i);
         this.shownIndex = -1;
         const r = this.results.get(i);
-        if (r)
+        if (r) {
           r.detail =
             'sensitive field — handed to the person instead of typing it';
+        }
         return true;
       }
     }
@@ -538,7 +540,9 @@ export class Tour {
         .catch(() => {});
     }
     await sleep(holdUntil - Date.now());
-    if (await this.userStopped()) return true;
+    if (await this.userStopped()) {
+      return true;
+    }
 
     if (action === 'none') {
       this.finishStep(i, 'squire');
@@ -639,12 +643,16 @@ export class Tour {
     ms: number,
     onTick?: () => void
   ): Promise<WaitOutcome> {
-    if (ms <= 0) return { kind: 'timeout' };
+    if (ms <= 0) {
+      return { kind: 'timeout' };
+    }
     const page = this.page;
     let onNav: ((f: unknown) => void) | undefined;
     const navP = new Promise<'nav'>((resolve) => {
       onNav = (f) => {
-        if (f === page.mainFrame()) resolve('nav');
+        if (f === page.mainFrame()) {
+          resolve('nav');
+        }
       };
       page.on('framenavigated', onNav);
     });
@@ -668,7 +676,9 @@ export class Tour {
       .waitForFunction(
         (s) => {
           const p = (window as any).__squirePresenter;
-          if (!p || p.seq <= s) return false;
+          if (!p || p.seq <= s) {
+            return false;
+          }
           return p.events.filter((e: any) => e.seq > s);
         },
         this.seqSeen,
@@ -687,8 +697,12 @@ export class Tour {
 
     try {
       const first = await Promise.race([evP, navP, closeP, guardP]);
-      if (first === 'closed' || page.isClosed()) return { kind: 'closed' };
-      if (first === 'timeout') return { kind: 'timeout' };
+      if (first === 'closed' || page.isClosed()) {
+        return { kind: 'closed' };
+      }
+      if (first === 'timeout') {
+        return { kind: 'timeout' };
+      }
       if (first === 'nav' || (first as any).kind === 'navraw') {
         await page
           .waitForLoadState('domcontentloaded', { timeout: 10_000 })
@@ -703,10 +717,64 @@ export class Tour {
       }
       return { kind: 'timeout' };
     } finally {
-      if (tick) clearInterval(tick);
-      if (guard) clearTimeout(guard);
-      if (onNav) page.off('framenavigated', onNav);
-      if (onClose) page.off('close', onClose);
+      if (tick) {
+        clearInterval(tick);
+      }
+      if (guard) {
+        clearTimeout(guard);
+      }
+      if (onNav) {
+        page.off('framenavigated', onNav);
+      }
+      if (onClose) {
+        page.off('close', onClose);
+      }
     }
+  }
+}
+
+/** Plain CSS the overlay can re-query itself after a re-render. */
+function cssOnly(selector?: string): string | null {
+  if (!selector) {
+    return null;
+  }
+  if (/^(xpath|text|css|id|data-testid|role)=/i.test(selector)) {
+    return null;
+  }
+  if (selector.includes('>>')) {
+    return null;
+  }
+  return selector;
+}
+
+/** Password, payment and one-time-code fields are never typed into. */
+async function isSensitive(handle: ElementHandle<Element>): Promise<boolean> {
+  return handle
+    .evaluate((e: any) => {
+      const t = String(e.type ?? '').toLowerCase();
+      const ac = String(e.autocomplete ?? '').toLowerCase();
+      return (
+        t === 'password' ||
+        ac.includes('password') ||
+        ac.startsWith('cc-') ||
+        ac === 'one-time-code'
+      );
+    })
+    .catch(() => false);
+}
+
+function defaultAdvance(step: PresentStep): Advance {
+  if (step.advance) {
+    return step.advance;
+  }
+  switch (step.action) {
+    case 'click':
+      return 'click';
+    case 'fill':
+    case 'type':
+    case 'select':
+      return 'input';
+    default:
+      return 'next';
   }
 }

@@ -38,7 +38,9 @@ const stepSchema = z.object({
   selector: z
     .string()
     .optional()
-    .describe('CSS selector; also accepts Playwright `xpath=…` / `text=…` prefixes.'),
+    .describe(
+      'CSS selector; also accepts Playwright `xpath=…` / `text=…` prefixes.'
+    ),
   text: z.string().optional().describe('Text for fill/type.'),
   key: z.string().optional().describe('Key for press, e.g. "Enter", "Tab".'),
   value: z
@@ -56,10 +58,10 @@ const stepSchema = z.object({
     .optional()
     .describe(
       'What the control LOOKS like, for when DOM selectors fail (canvas, WebGL, embedded viewers, images). ' +
-      'Two forms: a visible text label ("Sign in") — grounded via OCR, and refined to the detected control region ' +
-      'when an icon detector is configured; or, for icon-only controls with no readable text, a position hint ' +
-      '("hamburger menu icon top left", "close X top right", "play button center") — grounded via the icon detector ' +
-      'within that screen zone. Works for click/fill/type steps only.'
+        'Two forms: a visible text label ("Sign in") — grounded via OCR, and refined to the detected control region ' +
+        'when an icon detector is configured; or, for icon-only controls with no readable text, a position hint ' +
+        '("hamburger menu icon top left", "close X top right", "play button center") — grounded via the icon detector ' +
+        'within that screen zone. Works for click/fill/type steps only.'
     ),
 });
 
@@ -79,7 +81,9 @@ export default function runScriptTool(server: FastMCP): void {
     resume: z
       .string()
       .optional()
-      .describe('Continuation id from a prior run that stopped early — resumes its remaining steps.'),
+      .describe(
+        'Continuation id from a prior run that stopped early — resumes its remaining steps.'
+      ),
     humanize: z
       .enum(['auto', 'always', 'never'])
       .optional()
@@ -89,11 +93,15 @@ export default function runScriptTool(server: FastMCP): void {
     stopOnError: z
       .boolean()
       .optional()
-      .describe('Stop on the first failing step and return a continuation (default true).'),
+      .describe(
+        'Stop on the first failing step and return a continuation (default true).'
+      ),
     pauseAfter: z
       .number()
       .optional()
-      .describe('Hand control back after this many successful steps, returning a continuation for the rest.'),
+      .describe(
+        'Hand control back after this many successful steps, returning a continuation for the rest.'
+      ),
     stepTimeout: z
       .number()
       .optional()
@@ -149,7 +157,9 @@ export default function runScriptTool(server: FastMCP): void {
       } else if (args.steps && args.steps.length > 0) {
         steps = args.steps as Step[];
       } else {
-        throw new Error('Provide `steps` to run, or a `resume` continuation id.');
+        throw new Error(
+          'Provide `steps` to run, or a `resume` continuation id.'
+        );
       }
 
       // Resolve the target tab: an explicit stable id, or the active page.
@@ -184,7 +194,9 @@ export default function runScriptTool(server: FastMCP): void {
         // Evict oldest parked run if we're at the cap.
         if (pending.size >= MAX_PENDING) {
           const oldest = pending.keys().next().value;
-          if (oldest) pending.delete(oldest);
+          if (oldest) {
+            pending.delete(oldest);
+          }
         }
         continuationId = randomUUID();
         pending.set(continuationId, result.remaining);

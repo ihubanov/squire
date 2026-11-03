@@ -6,7 +6,7 @@
  * It can perform summarization, question-answering, and analysis on retrieved chunks.
  */
 
-import { Document } from '@langchain/core/documents';
+import type { Document } from '@langchain/core/documents';
 import { queryVectorStore } from './simple-pdf-indexer.js';
 import log from '../../logger.js';
 
@@ -14,10 +14,19 @@ import log from '../../logger.js';
  * Reasoning task types supported by the system
  */
 export type ReasoningTask =
-  | 'summarization'
-  | 'question-answering'
-  | 'analysis'
-  | 'classification';
+  'summarization' | 'question-answering' | 'analysis' | 'classification';
+
+/**
+ * Enhanced RAG response with reasoning
+ */
+export interface EnhancedRAGResponse {
+  query: string;
+  retrievedChunks: Document[];
+  reasoningResults: ReasoningResult[];
+  summary: string;
+  answer: string;
+  sources: string[];
+}
 
 /**
  * Configuration for reasoning models
@@ -37,18 +46,6 @@ interface ReasoningResult {
   reasoningOutput: string;
   confidence?: number;
   metadata: Record<string, any>;
-}
-
-/**
- * Enhanced RAG response with reasoning
- */
-export interface EnhancedRAGResponse {
-  query: string;
-  retrievedChunks: Document[];
-  reasoningResults: ReasoningResult[];
-  summary: string;
-  answer: string;
-  sources: string[];
 }
 
 /**

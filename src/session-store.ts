@@ -8,10 +8,7 @@ import { logActivity } from './activity-log.js';
 
 // Type aliases for driver variants used throughout the project.
 export type DriverInstance =
-  | Client
-  | AndroidUiautomator2Driver
-  | XCUITestDriver
-  | PlaywrightDriver;
+  Client | AndroidUiautomator2Driver | XCUITestDriver | PlaywrightDriver;
 export type NullableDriverInstance = DriverInstance | null;
 export type SessionCapabilities = Record<string, any>;
 
@@ -93,21 +90,6 @@ export function isPlaywrightDriverSession(
   driver: NullableDriverInstance
 ): driver is PlaywrightDriver {
   return driver instanceof PlaywrightDriver;
-}
-
-/**
- * Detect the Appium mobile driver type WITHOUT importing the driver classes.
- * Importing `appium-uiautomator2-driver` / `appium-xcuitest-driver` at module
- * load costs ~2-3s (they pull the whole Appium stack) and is wasted on the
- * browser-first path. The class name is stable for these packages, so a
- * constructor-name check is an equivalent, zero-import `instanceof`.
- */
-function driverCtorName(driver: unknown): string {
-  try {
-    return (driver as { constructor?: { name?: string } } | null)?.constructor?.name ?? '';
-  } catch {
-    return '';
-  }
 }
 
 export function isRemoteDriverSession(driver: NullableDriverInstance): boolean {
@@ -200,9 +182,13 @@ export function setSession(
  */
 export function touchActiveSession(): void {
   const id = getActiveSessionId();
-  if (!id) return;
+  if (!id) {
+    return;
+  }
   const s = sessions.get(id);
-  if (s) s.lastActivity = Date.now();
+  if (s) {
+    s.lastActivity = Date.now();
+  }
 }
 
 /**
@@ -215,7 +201,9 @@ export function touchActiveSession(): void {
 export async function reapIdleSessions(
   idleMs: number
 ): Promise<{ reaped: number; ids: string[] }> {
-  if (!(idleMs > 0)) return { reaped: 0, ids: [] };
+  if (!(idleMs > 0)) {
+    return { reaped: 0, ids: [] };
+  }
   const now = Date.now();
   const stale = Array.from(sessions.values())
     .filter((s) => !s.isDeletingSession && now - s.lastActivity > idleMs)
@@ -225,7 +213,9 @@ export async function reapIdleSessions(
   for (const sessionId of stale) {
     try {
       const deleted = await safeDeleteSession(sessionId);
-      if (deleted) reapedIds.push(sessionId);
+      if (deleted) {
+        reapedIds.push(sessionId);
+      }
     } catch (error) {
       log.error(`Error reaping idle session ${sessionId}:`, error);
     }
@@ -248,10 +238,14 @@ export function dropDisconnectedSession(
   reason = 'browser closed'
 ): boolean {
   const s = sessions.get(sessionId);
-  if (!s || s.isDeletingSession) return false;
+  if (!s || s.isDeletingSession) {
+    return false;
+  }
   sessions.delete(sessionId);
   for (const [conn, id] of activeSessionByConnection.entries()) {
-    if (id === sessionId) activeSessionByConnection.delete(conn);
+    if (id === sessionId) {
+      activeSessionByConnection.delete(conn);
+    }
   }
   log.info(`Session ${sessionId} dropped: ${reason} (browser gone).`);
   try {
@@ -349,37 +343,6 @@ export function hasActiveSession(): boolean {
   return !!session && !session.isDeletingSession;
 }
 
-/**
- * After a session is deleted, drop it as the active session for every client
- * that had it selected, and — for the client performing the deletion — fall
- * back only to another session that *same* client owns. We deliberately never
- * auto-activate a session owned by a different client, which would re-introduce
- * cross-client interference.
- */
-function reassignActiveAfterDelete(deletedSessionId: string): void {
-  const deletingConnection = currentConnectionId();
-
-  for (const [connectionId, activeId] of activeSessionByConnection.entries()) {
-    if (activeId !== deletedSessionId) {
-      continue;
-    }
-    if (connectionId === deletingConnection) {
-      const replacement = Array.from(sessions.values()).find(
-        (s) =>
-          s.sessionId !== deletedSessionId &&
-          s.ownerConnection === deletingConnection
-      );
-      if (replacement) {
-        activeSessionByConnection.set(connectionId, replacement.sessionId);
-      } else {
-        activeSessionByConnection.delete(connectionId);
-      }
-    } else {
-      activeSessionByConnection.delete(connectionId);
-    }
-  }
-}
-
 export async function safeDeleteSession(sessionId?: string): Promise<boolean> {
   const id = sessionId ?? getActiveSessionId();
 
@@ -473,6 +436,55 @@ export async function safeDeleteSessionsForConnection(
   activeSessionByConnection.delete(connectionId);
 
   return deletedCount;
+}
+
+/**
+ * Detect the Appium mobile driver type WITHOUT importing the driver classes.
+ * Importing `appium-uiautomator2-driver` / `appium-xcuitest-driver` at module
+ * load costs ~2-3s (they pull the whole Appium stack) and is wasted on the
+ * browser-first path. The class name is stable for these packages, so a
+ * constructor-name check is an equivalent, zero-import `instanceof`.
+ */
+function driverCtorName(driver: unknown): string {
+  try {
+    return (
+      (driver as { constructor?: { name?: string } } | null)?.constructor
+        ?.name ?? ''
+    );
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * After a session is deleted, drop it as the active session for every client
+ * that had it selected, and — for the client performing the deletion — fall
+ * back only to another session that *same* client owns. We deliberately never
+ * auto-activate a session owned by a different client, which would re-introduce
+ * cross-client interference.
+ */
+function reassignActiveAfterDelete(deletedSessionId: string): void {
+  const deletingConnection = currentConnectionId();
+
+  for (const [connectionId, activeId] of activeSessionByConnection.entries()) {
+    if (activeId !== deletedSessionId) {
+      continue;
+    }
+    if (connectionId === deletingConnection) {
+      const replacement = Array.from(sessions.values()).find(
+        (s) =>
+          s.sessionId !== deletedSessionId &&
+          s.ownerConnection === deletingConnection
+      );
+      if (replacement) {
+        activeSessionByConnection.set(connectionId, replacement.sessionId);
+      } else {
+        activeSessionByConnection.delete(connectionId);
+      }
+    } else {
+      activeSessionByConnection.delete(connectionId);
+    }
+  }
 }
 
 export const getPlatformName = (driver: any): string => {

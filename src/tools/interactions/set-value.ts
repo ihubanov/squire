@@ -43,7 +43,11 @@ export default function setValue(server: FastMCP): void {
       try {
         await _setValue(driver, args.elementUUID, args.text);
         if (isPlaywrightDriverSession(driver)) {
-          logActivity({ tool: 'appium_set_value', tab: driver.page.url(), status: 'ok' });
+          logActivity({
+            tool: 'appium_set_value',
+            tab: driver.page.url(),
+            status: 'ok',
+          });
         }
         return {
           content: [

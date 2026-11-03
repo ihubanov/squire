@@ -34,8 +34,12 @@ export async function findFreePort(
 ): Promise<number> {
   for (let i = 0; i < maxTries; i++) {
     const candidate = preferred + i;
-    if (candidate > 65535) break;
-    if (await isPortFree(candidate, host)) return candidate;
+    if (candidate > 65535) {
+      break;
+    }
+    if (await isPortFree(candidate, host)) {
+      return candidate;
+    }
   }
   return new Promise((resolve, reject) => {
     const srv = net.createServer();

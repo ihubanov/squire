@@ -14,82 +14,6 @@ import log from '../../logger.js';
 
 const execAsync = promisify(exec);
 
-function cachePath(folder: string): string {
-  return path.join(os.homedir(), '.cache', 'appium-mcp', folder);
-}
-
-async function getLatestWDAVersion(): Promise<string> {
-  try {
-    const response = await axios.get(
-      'https://api.github.com/repos/appium/WebDriverAgent/releases/latest',
-      {
-        headers: {
-          'User-Agent': 'mcp-appium',
-          Accept: 'application/vnd.github.v3+json',
-        },
-      }
-    );
-
-    const release = response.data;
-    if (release.tag_name) {
-      return release.tag_name.replace(/^v/, '');
-    } else {
-      throw new Error('No tag_name found in release data');
-    }
-  } catch (error: any) {
-    if (error.response) {
-      throw new Error(
-        `Failed to fetch WDA version: ${error.response.status} ${error.response.statusText}`
-      );
-    }
-    throw error;
-  }
-}
-
-async function cleanupFile(path: string): Promise<void> {
-  try {
-    await access(path, constants.F_OK);
-    await unlink(path);
-  } catch {
-    // File doesn't exist or already deleted
-  }
-}
-
-async function downloadFile(url: string, destPath: string): Promise<void> {
-  try {
-    const response = await axios({
-      url,
-      method: 'GET',
-      responseType: 'stream',
-      maxRedirects: 5,
-    });
-
-    const writer = createWriteStream(destPath);
-
-    try {
-      await pipeline(response.data, writer);
-    } catch (streamError: any) {
-      writer.close();
-      await cleanupFile(destPath);
-      throw streamError;
-    }
-  } catch (error: any) {
-    // Clean up partial file on error
-    await cleanupFile(destPath);
-
-    if (error.response) {
-      throw new Error(
-        `Failed to download: ${error.response.status} ${error.response.statusText}`
-      );
-    }
-    throw error;
-  }
-}
-
-async function unzipFile(zipPath: string, destDir: string): Promise<void> {
-  await execAsync(`unzip -q "${zipPath}" -d "${destDir}"`);
-}
-
 export default function setupWDA(server: any): void {
   server.addTool({
     name: 'setup_wda',
@@ -209,4 +133,80 @@ export default function setupWDA(server: any): void {
       }
     },
   });
+}
+
+function cachePath(folder: string): string {
+  return path.join(os.homedir(), '.cache', 'appium-mcp', folder);
+}
+
+async function getLatestWDAVersion(): Promise<string> {
+  try {
+    const response = await axios.get(
+      'https://api.github.com/repos/appium/WebDriverAgent/releases/latest',
+      {
+        headers: {
+          'User-Agent': 'mcp-appium',
+          Accept: 'application/vnd.github.v3+json',
+        },
+      }
+    );
+
+    const release = response.data;
+    if (release.tag_name) {
+      return release.tag_name.replace(/^v/, '');
+    } else {
+      throw new Error('No tag_name found in release data');
+    }
+  } catch (error: any) {
+    if (error.response) {
+      throw new Error(
+        `Failed to fetch WDA version: ${error.response.status} ${error.response.statusText}`
+      );
+    }
+    throw error;
+  }
+}
+
+async function cleanupFile(path: string): Promise<void> {
+  try {
+    await access(path, constants.F_OK);
+    await unlink(path);
+  } catch {
+    // File doesn't exist or already deleted
+  }
+}
+
+async function downloadFile(url: string, destPath: string): Promise<void> {
+  try {
+    const response = await axios({
+      url,
+      method: 'GET',
+      responseType: 'stream',
+      maxRedirects: 5,
+    });
+
+    const writer = createWriteStream(destPath);
+
+    try {
+      await pipeline(response.data, writer);
+    } catch (streamError: any) {
+      writer.close();
+      await cleanupFile(destPath);
+      throw streamError;
+    }
+  } catch (error: any) {
+    // Clean up partial file on error
+    await cleanupFile(destPath);
+
+    if (error.response) {
+      throw new Error(
+        `Failed to download: ${error.response.status} ${error.response.statusText}`
+      );
+    }
+    throw error;
+  }
+}
+
+async function unzipFile(zipPath: string, destDir: string): Promise<void> {
+  await execAsync(`unzip -q "${zipPath}" -d "${destDir}"`);
 }

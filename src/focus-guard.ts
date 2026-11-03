@@ -27,21 +27,6 @@ export function markSharedWithUser(context: BrowserContext): void {
   sharedContexts.add(context);
 }
 
-function isSharedWithUser(page: Page): boolean {
-  try {
-    return sharedContexts.has(page.context());
-  } catch {
-    return false;
-  }
-}
-
-function isEnabled(): boolean {
-  const v = (process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] ?? '')
-    .trim()
-    .toLowerCase();
-  return v === 'true' || v === '1';
-}
-
 /**
  * Returns true if `document.hidden === false` — the page is the foreground
  * tab in its window. Returns false on any error (page closed, eval blocked,
@@ -49,7 +34,9 @@ function isEnabled(): boolean {
  * the AI out due to a flaky probe.
  */
 export async function isPageUserFocused(page: Page): Promise<boolean> {
-  if (page.isClosed()) return false;
+  if (page.isClosed()) {
+    return false;
+  }
   try {
     return await page.evaluate(() => !document.hidden);
   } catch {
@@ -59,21 +46,53 @@ export async function isPageUserFocused(page: Page): Promise<boolean> {
 
 export async function assertNotUserFocused(
   page: Page,
-  action: string,
+  action: string
 ): Promise<void> {
-  if (!isEnabled()) return;
-  if (!isSharedWithUser(page)) return;
+  if (!isEnabled()) {
+    return;
+  }
+  if (!isSharedWithUser(page)) {
+    return;
+  }
   if (await isPageUserFocused(page)) {
     let url = '';
-    try { url = page.url(); } catch { /* ignore */ }
+    try {
+      url = page.url();
+    } catch {
+      /* ignore */
+    }
     const msg =
       `Refusing to ${action} on tab "${url}" — the user is currently focused on it. ` +
       `Work on a different tab (open one with playwright_new_tab if needed), or ` +
       `wait until the user switches away. Use mcp__tabs__tabs_state to see which ` +
       `tab is user-focused before retrying.`;
-    import('./activity-log.js').then(({ logActivity }) =>
-      logActivity({ tool: action, tab: url, status: 'blocked', detail: 'user-focused tab' }),
-    ).catch(() => { /* ignore */ });
+    import('./activity-log.js')
+      .then(({ logActivity }) =>
+        logActivity({
+          tool: action,
+          tab: url,
+          status: 'blocked',
+          detail: 'user-focused tab',
+        })
+      )
+      .catch(() => {
+        /* ignore */
+      });
     throw new Error(msg);
   }
+}
+
+function isSharedWithUser(page: Page): boolean {
+  try {
+    return sharedContexts.has(page.context());
+  } catch {
+    return false;
+  }
+}
+
+function isEnabled(): boolean {
+  const v = (process.env.APPIUM_MCP_RESPECT_USER_FOCUS ?? '')
+    .trim()
+    .toLowerCase();
+  return v === 'true' || v === '1';
 }

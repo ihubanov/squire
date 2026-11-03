@@ -26,13 +26,17 @@ export async function getRelay(
   timeoutMs: number,
   onWaiting?: () => void
 ): Promise<{ relay: CdpRelay; fresh: boolean }> {
-  if (relay?.isOpen()) return { relay, fresh: false };
+  if (relay?.isOpen()) {
+    return { relay, fresh: false };
+  }
   if (!relayPending) {
     relayPending = openCdpRelay(upstreamUrl, timeoutMs, onWaiting).then(
       (r) => {
         relay = r;
         r.onClose(() => {
-          if (relay === r) relay = undefined;
+          if (relay === r) {
+            relay = undefined;
+          }
         });
         relayPending = undefined;
         return r;
@@ -65,18 +69,14 @@ export async function getUserBrowser(
       return b;
     });
     pending = { endpoint, promise };
-    promise.then(
-      () => { if (pending?.promise === promise) pending = undefined; },
-      () => { if (pending?.promise === promise) pending = undefined; }
-    );
+    const clear = () => {
+      if (pending?.promise === promise) {
+        pending = undefined;
+      }
+    };
+    promise.then(clear, clear);
   }
   return { browser: await pending.promise, reused: false };
-}
-
-function idleMs(): number {
-  if (process.env.APPIUM_MCP_CDP_KEEP_CONNECTION === '0') return 0;
-  const v = parseInt(process.env.APPIUM_MCP_CDP_IDLE_MS ?? '', 10);
-  return Number.isFinite(v) && v >= 0 ? v : 10 * 60_000;
 }
 
 /** A session started using the shared connection. */
@@ -89,11 +89,15 @@ export function acquireUserBrowser(): void {
 /** A session stopped using it; close it once nobody has for a while. */
 export function releaseUserBrowser(): void {
   users = Math.max(0, users - 1);
-  if (users > 0) return;
+  if (users > 0) {
+    return;
+  }
   clearTimeout(idleTimer);
   const close = () => {
     idleTimer = undefined;
-    if (users > 0) return;
+    if (users > 0) {
+      return;
+    }
     const b = shared?.browser;
     shared = undefined;
     void b?.close().catch(() => {});
@@ -118,4 +122,12 @@ export function resetUserBrowser(): void {
   users = 0;
   clearTimeout(idleTimer);
   idleTimer = undefined;
+}
+
+function idleMs(): number {
+  if (process.env.APPIUM_MCP_CDP_KEEP_CONNECTION === '0') {
+    return 0;
+  }
+  const v = parseInt(process.env.APPIUM_MCP_CDP_IDLE_MS ?? '', 10);
+  return Number.isFinite(v) && v >= 0 ? v : 10 * 60_000;
 }

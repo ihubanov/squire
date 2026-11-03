@@ -1,4 +1,4 @@
-import { FastMCP } from 'fastmcp';
+import type { FastMCP } from 'fastmcp';
 import { getDriver } from '../../session-store.js';
 import { elementUUIDScheme } from '../../schema.js';
 import type { NullableDriverInstance } from '../../session-store.js';
@@ -13,6 +13,14 @@ import {
 import { getScreenshot } from '../../command.js';
 import z from 'zod';
 import { imageUtil } from '@appium/support';
+
+export interface ScreenshotDeps {
+  getDriver: () => NullableDriverInstance;
+  writeFile: typeof writeFile;
+  mkdir: typeof mkdir;
+  resolveScreenshotDir: typeof resolveScreenshotDir;
+  dateNow: () => number;
+}
 
 /**
  * Resolves the screenshot directory path.
@@ -32,14 +40,6 @@ export function resolveScreenshotDir(): string {
   }
 
   return join(process.cwd(), screenshotDir);
-}
-
-export interface ScreenshotDeps {
-  getDriver: () => NullableDriverInstance;
-  writeFile: typeof writeFile;
-  mkdir: typeof mkdir;
-  resolveScreenshotDir: typeof resolveScreenshotDir;
-  dateNow: () => number;
 }
 
 const defaultDeps: ScreenshotDeps = {

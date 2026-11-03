@@ -4,12 +4,7 @@
  * Bridges Playwright's Locator/ElementHandle-based API to the UUID-based
  * element model used by the existing tool infrastructure.
  */
-import type {
-  Browser,
-  BrowserContext,
-  Page,
-  ElementHandle,
-} from 'playwright';
+import type { Browser, BrowserContext, Page, ElementHandle } from 'playwright';
 import { randomUUID } from 'node:crypto';
 import { releaseUserBrowser } from './cdp-connection.js';
 
@@ -47,7 +42,7 @@ export class PlaywrightDriver {
     browser: Browser,
     context: BrowserContext,
     page: Page,
-    attachedToUserBrowser = false,
+    attachedToUserBrowser = false
   ) {
     this.browser = browser;
     this.context = context;
@@ -84,7 +79,9 @@ export class PlaywrightDriver {
   /** Resolve a stable tab id to a live Page in this context, or undefined. */
   resolvePage(tabId: string): Page | undefined {
     for (const p of this.context.pages()) {
-      if (this.getTabId(p) === tabId) return p;
+      if (this.getTabId(p) === tabId) {
+        return p;
+      }
     }
     return undefined;
   }

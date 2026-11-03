@@ -12,7 +12,7 @@
  * See src/tools/README.md for tool organization.
  * See src/tools/metadata/README.md for YAML metadata approach.
  */
-import { FastMCP } from 'fastmcp';
+import type { FastMCP } from 'fastmcp';
 import log from '../logger.js';
 import { touchActiveSession } from '../session-store.js';
 import {
@@ -73,29 +73,18 @@ import runScriptTool from './web/run-script.js';
 import present from './web/present.js';
 import selectOption from './web/select-option.js';
 import hover from './web/hover.js';
-import { newTab, switchTab, listTabs, closeTab, userActivity } from './web/tabs.js';
-import { type as playwrightType, pressKey as playwrightPressKey } from './web/keyboard.js';
+import {
+  newTab,
+  switchTab,
+  listTabs,
+  closeTab,
+  userActivity,
+} from './web/tabs.js';
+import {
+  type as playwrightType,
+  pressKey as playwrightPressKey,
+} from './web/keyboard.js';
 import getUrl from './web/get-url.js';
-
-/**
- * Web-only mode.
- *
- * Set --web-only on the command line, or APPIUM_MCP_WEB_ONLY=1, to register
- * just the browser tools plus the session/element tools they share with the
- * mobile side. Everything unambiguously mobile — device setup, app management,
- * touch gestures, contexts, test generation — is left unregistered.
- *
- * The point is tool-surface economy: every registered tool's description is
- * loaded into the model's context on every session, so a client that will only
- * ever drive a browser should not pay for the mobile half.
- */
-function isWebOnly(): boolean {
-  if (process.argv.includes('--web-only')) {
-    return true;
-  }
-  const env = process.env.APPIUM_MCP_WEB_ONLY;
-  return env === '1' || env === 'true';
-}
 
 export default function registerTools(server: FastMCP): void {
   const webOnly = isWebOnly();
@@ -153,16 +142,24 @@ export default function registerTools(server: FastMCP): void {
         log.info(`[TOOL START] ${toolName}`, redactArgs(args));
         // Keep the active session's idle clock fresh so the reaper only
         // closes browsers/drivers that are genuinely unused.
-        try { touchActiveSession(); } catch { /* no active session yet */ }
+        try {
+          touchActiveSession();
+        } catch {
+          /* no active session yet */
+        }
         // What this tool does in the user's browser is not the user's activity.
         const bracket = toolName !== 'playwright_user_activity';
         try {
-          if (bracket) beginAction();
+          if (bracket) {
+            beginAction();
+          }
           let result;
           try {
             result = await originalExecute(args, context);
           } finally {
-            if (bracket) endAction();
+            if (bracket) {
+              endAction();
+            }
           }
           const duration = Date.now() - start;
           log.info(`[TOOL END] ${toolName} (${duration}ms)`);
@@ -172,7 +169,10 @@ export default function registerTools(server: FastMCP): void {
             if (seen.length) {
               result = {
                 ...result,
-                content: [{ type: 'text', text: formatUserEvents(seen) }, ...result.content],
+                content: [
+                  { type: 'text', text: formatUserEvents(seen) },
+                  ...result.content,
+                ],
               };
             }
           }
@@ -287,4 +287,24 @@ export default function registerTools(server: FastMCP): void {
   }
 
   log.info(webOnly ? 'Web-only tools registered' : 'All tools registered');
+}
+
+/**
+ * Web-only mode.
+ *
+ * Set --web-only on the command line, or APPIUM_MCP_WEB_ONLY=1, to register
+ * just the browser tools plus the session/element tools they share with the
+ * mobile side. Everything unambiguously mobile — device setup, app management,
+ * touch gestures, contexts, test generation — is left unregistered.
+ *
+ * The point is tool-surface economy: every registered tool's description is
+ * loaded into the model's context on every session, so a client that will only
+ * ever drive a browser should not pay for the mobile half.
+ */
+function isWebOnly(): boolean {
+  if (process.argv.includes('--web-only')) {
+    return true;
+  }
+  const env = process.env.APPIUM_MCP_WEB_ONLY;
+  return env === '1' || env === 'true';
 }

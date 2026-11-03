@@ -6,32 +6,6 @@ import { getElementRect, getWindowRect } from '../../command.js';
 
 const DROP_PAUSE_DURATION_MS = 150;
 
-async function performDragAndDrop(
-  driver: any,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  duration: number,
-  longPressDuration: number
-): Promise<void> {
-  await driver.performActions([
-    {
-      type: 'pointer',
-      id: 'finger1',
-      parameters: { pointerType: 'touch' },
-      actions: [
-        { type: 'pointerMove', duration: 0, x: startX, y: startY },
-        { type: 'pointerDown', button: 0 },
-        { type: 'pause', duration: longPressDuration },
-        { type: 'pointerMove', duration, x: endX, y: endY },
-        { type: 'pause', duration: DROP_PAUSE_DURATION_MS },
-        { type: 'pointerUp', button: 0 },
-      ],
-    },
-  ]);
-}
-
 export default function dragAndDrop(server: FastMCP): void {
   const dragAndDropSchema = z.object({
     sourceElementUUID: elementUUIDScheme
@@ -229,4 +203,30 @@ export default function dragAndDrop(server: FastMCP): void {
       }
     },
   });
+}
+
+async function performDragAndDrop(
+  driver: any,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  duration: number,
+  longPressDuration: number
+): Promise<void> {
+  await driver.performActions([
+    {
+      type: 'pointer',
+      id: 'finger1',
+      parameters: { pointerType: 'touch' },
+      actions: [
+        { type: 'pointerMove', duration: 0, x: startX, y: startY },
+        { type: 'pointerDown', button: 0 },
+        { type: 'pause', duration: longPressDuration },
+        { type: 'pointerMove', duration, x: endX, y: endY },
+        { type: 'pause', duration: DROP_PAUSE_DURATION_MS },
+        { type: 'pointerUp', button: 0 },
+      ],
+    },
+  ]);
 }

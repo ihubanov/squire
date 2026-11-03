@@ -70,7 +70,12 @@ export default function selectOption(server: FastMCP): void {
         }
 
         const selected = await el.selectOption(option);
-        logActivity({ tool: 'playwright_select_option', tab: driver.page.url(), status: 'ok', detail: JSON.stringify(option) });
+        logActivity({
+          tool: 'playwright_select_option',
+          tab: driver.page.url(),
+          status: 'ok',
+          detail: JSON.stringify(option),
+        });
 
         return {
           content: [

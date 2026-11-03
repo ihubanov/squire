@@ -22,7 +22,7 @@ export default function navigate(server: FastMCP): void {
   server.addTool({
     name: 'playwright_navigate',
     description:
-      'Navigate the AI\'s currently active tab to a URL in the real Chromium browser the user is sitting in front of. The page loads, JavaScript runs, cookies/redirects/captchas behave exactly as they would for a human. Use this to follow a link from a previous result, change the URL of a tab you already opened, or move through a multi-page flow. Prefer playwright_new_tab when starting a fresh task so you don\'t clobber an existing tab. Refused if the target tab is the qwen-web TUI or the user is currently focused on it.',
+      "Navigate the AI's currently active tab to a URL in the real Chromium browser the user is sitting in front of. The page loads, JavaScript runs, cookies/redirects/captchas behave exactly as they would for a human. Use this to follow a link from a previous result, change the URL of a tab you already opened, or move through a multi-page flow. Prefer playwright_new_tab when starting a fresh task so you don't clobber an existing tab. Refused if the target tab is the qwen-web TUI or the user is currently focused on it.",
     parameters: navigateSchema,
     annotations: {
       readOnlyHint: false,
@@ -52,7 +52,12 @@ export default function navigate(server: FastMCP): void {
 
         const status = response?.status() ?? 'unknown';
         const title = await driver.page.title();
-        logActivity({ tool: 'playwright_navigate', tab: args.url, status: 'ok', detail: title });
+        logActivity({
+          tool: 'playwright_navigate',
+          tab: args.url,
+          status: 'ok',
+          detail: title,
+        });
 
         return {
           content: [

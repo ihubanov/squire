@@ -44,7 +44,12 @@ export default function evaluate(server: FastMCP): void {
         const result = await driver.page.evaluate(args.script);
         const resultStr =
           typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-        logActivity({ tool: 'playwright_evaluate', tab: driver.page.url(), status: 'ok', detail: args.script.slice(0, 80) });
+        logActivity({
+          tool: 'playwright_evaluate',
+          tab: driver.page.url(),
+          status: 'ok',
+          detail: args.script.slice(0, 80),
+        });
 
         return {
           content: [
@@ -63,14 +68,28 @@ export default function evaluate(server: FastMCP): void {
         // return value. (For multi-step flows across a navigation, prefer
         // playwright_run_script, which resumes on the far side.)
         const msg = err?.message ?? String(err);
-        if (typeof msg === 'string' && msg.includes('Execution context was destroyed')) {
+        if (
+          typeof msg === 'string' &&
+          msg.includes('Execution context was destroyed')
+        ) {
           try {
             await driver.page.waitForLoadState('load', { timeout: 15000 });
           } catch {
             /* best-effort settle */
           }
-          const url = (() => { try { return driver.page.url(); } catch { return ''; } })();
-          logActivity({ tool: 'playwright_evaluate', tab: url, status: 'ok', detail: 'navigated (context destroyed)' });
+          const url = (() => {
+            try {
+              return driver.page.url();
+            } catch {
+              return '';
+            }
+          })();
+          logActivity({
+            tool: 'playwright_evaluate',
+            tab: url,
+            status: 'ok',
+            detail: 'navigated (context destroyed)',
+          });
           return {
             content: [
               {

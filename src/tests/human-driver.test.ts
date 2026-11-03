@@ -7,7 +7,14 @@
  *  - stopOnError halts on the first failure and returns the remaining steps,
  *    which a resume run then completes.
  */
-import { describe, test, expect, beforeAll, afterAll, jest } from '@jest/globals';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  jest,
+} from '@jest/globals';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -53,7 +60,7 @@ describe('human-driver', () => {
       const res = await runScript(
         page,
         [{ action: 'click', selector: '#hidden-btn' }],
-        { humanize: 'auto', stepTimeout: 1200 },
+        { humanize: 'auto', stepTimeout: 1200 }
       );
       expect(res.finished).toBe(true);
       expect(res.results[0]!.status).toBe('ok');
@@ -72,9 +79,13 @@ describe('human-driver', () => {
         page,
         [
           { action: 'click', selector: '#go' },
-          { action: 'eval', script: 'document.getElementById("done") && document.getElementById("done").textContent' },
+          {
+            action: 'eval',
+            script:
+              'document.getElementById("done") && document.getElementById("done").textContent',
+          },
         ],
-        { stepTimeout: 3000 },
+        { stepTimeout: 3000 }
       );
       expect(res.finished).toBe(true);
       expect(res.completed).toBe(2);
@@ -96,7 +107,7 @@ describe('human-driver', () => {
           { action: 'click', selector: '#does-not-exist' },
           { action: 'eval', script: '1 + 1' },
         ],
-        { humanize: 'never', stopOnError: true, stepTimeout: 800 },
+        { humanize: 'never', stopOnError: true, stepTimeout: 800 }
       );
       expect(first.finished).toBe(false);
       expect(first.results[0]!.status).toBe('failed');

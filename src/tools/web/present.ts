@@ -218,7 +218,9 @@ export default function present(server: FastMCP): void {
         );
       });
 
-      if (tour.done) tours.delete(tourId);
+      if (tour.done) {
+        tours.delete(tourId);
+      }
 
       logActivity({
         tool: 'playwright_present',

@@ -15,7 +15,7 @@ export default function generateTest(server: FastMCP): void {
   server.addTool({
     name: 'appium_click',
     description:
-      "Click an element. In a Playwright web session this clicks like a human cursor — full mouse-down/up, JS click handlers fire, navigation/form submission happens normally. Use it on links, buttons, search-result entries, login submit buttons, etc. Element is identified by UUID from appium_find_element.",
+      'Click an element. In a Playwright web session this clicks like a human cursor — full mouse-down/up, JS click handlers fire, navigation/form submission happens normally. Use it on links, buttons, search-result entries, login submit buttons, etc. Element is identified by UUID from appium_find_element.',
     parameters: clickActionSchema,
     annotations: {
       readOnlyHint: false,
@@ -41,7 +41,11 @@ export default function generateTest(server: FastMCP): void {
       try {
         await _elementClick(driver, args.elementUUID);
         if (isPlaywrightDriverSession(driver)) {
-          logActivity({ tool: 'appium_click', tab: driver.page.url(), status: 'ok' });
+          logActivity({
+            tool: 'appium_click',
+            tab: driver.page.url(),
+            status: 'ok',
+          });
         }
         return {
           content: [

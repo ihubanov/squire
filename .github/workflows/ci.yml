@@ -7,28 +7,19 @@ on:
     branches: [main]
 
 jobs:
-  node_matrix:
-    uses: appium/appium-workflows/.github/workflows/node-lts-matrix.yml@main
-
   lint-format-and-test:
     name: ESLint, Prettier, and Tests
     runs-on: ubuntu-latest
-    needs:
-    - node_matrix
-
-    strategy:
-      fail-fast: false
-      matrix:
-        node-version: ${{ fromJSON(needs.node_matrix.outputs.versions) }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      # Node 22 with its own npm: npm 11 (Node 24) lays out the Appium
+      # packages so that their types clash and the build fails.
+      - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: 22
 
       - uses: SocketDev/action@v1
         with:
@@ -36,9 +27,6 @@ jobs:
 
       - name: Install dependencies
         run: sfw npm install
-
-      - name: List installed packages
-        run: npm list --depth=0
 
       - name: Run ESLint
         run: npm run lint
@@ -48,6 +36,9 @@ jobs:
 
       - run: npm run build
         name: Build
+
+      # The web tests drive a real Chromium.
+      - run: npx playwright install --with-deps chromium
 
       - name: Run Unit Tests
         run: npm run test

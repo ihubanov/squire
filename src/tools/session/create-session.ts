@@ -8,7 +8,11 @@ import { URL } from 'node:url';
 import type { BrowserContext } from 'playwright';
 import type { AndroidUiautomator2Driver } from 'appium-uiautomator2-driver';
 import type { XCUITestDriver } from 'appium-xcuitest-driver';
-import { setSession, listSessions, dropDisconnectedSession } from '../../session-store.js';
+import {
+  setSession,
+  listSessions,
+  dropDisconnectedSession,
+} from '../../session-store.js';
 import {
   getSelectedDevice,
   getSelectedDeviceType,
@@ -42,6 +46,48 @@ import {
 } from '../../ui/mcp-ui-utils.js';
 import WebDriver from 'webdriver';
 
+/**
+ * Registers a tool for creating a new mobile session with Android or iOS devices.
+ *
+ * This function adds a 'create_session' tool to the provided server that handles
+ * mobile session creation with support for both local and remote Appium servers.
+ *
+ * @param server - The server instance to which the create_session tool will be added
+ *
+ * @tool create_session
+ * @description Creates a new mobile session with Android or iOS device. Requires prior
+ * platform selection via the select_platform tool. Supports both local and remote
+ * Appium server connections.
+ *
+ * @param {Object} args - Tool execution arguments
+ * @param {'ios' | 'android'} args.platform - REQUIRED. The target platform, must match
+ * the platform explicitly selected via select_platform tool
+ * @param {Object} [args.capabilities] - Optional custom W3C format capabilities
+ * @param {string} [args.remoteServerUrl] - Optional remote Appium server URL
+ * (e.g., http://localhost:4723). If not provided, uses local Appium server
+ *
+ * @returns {Promise<Object>} Response object containing:
+ * - text: Success message with session ID and device details
+ * - ui: Interactive session dashboard UI component
+ *
+ * @throws {Error} If session creation fails or platform capabilities cannot be loaded
+ *
+ * @example
+ * // Register the tool
+ * createSession(server);
+ */
+export interface WebSessionOptions {
+  browser?: string;
+  /** Default true. */
+  headless?: boolean;
+  url?: string;
+  viewport?: { width: number; height: number };
+  /** Cookies and localStorage for a launched browser (not used when attached to the user's). */
+  storageState?: Awaited<ReturnType<BrowserContext['storageState']>>;
+  /** Called if attaching to the user's Chrome is slow, most likely waiting on its Allow prompt. */
+  onWaiting?: (message: string) => void;
+}
+
 // Define capabilities type
 interface Capabilities {
   platformName: string;
@@ -55,25 +101,6 @@ interface CapabilitiesConfig {
   android: Record<string, any>;
   ios: Record<string, any>;
   general: Record<string, any>;
-}
-
-/**
- * Load capabilities configuration from file if specified in environment
- */
-async function loadCapabilitiesConfig(): Promise<CapabilitiesConfig> {
-  const configPath = process.env.CAPABILITIES_CONFIG;
-  if (!configPath) {
-    return { android: {}, ios: {}, general: {} };
-  }
-
-  try {
-    await access(configPath, constants.F_OK);
-    const configContent = await readFile(configPath, 'utf8');
-    return JSON.parse(configContent);
-  } catch (error) {
-    log.warn(`Failed to parse capabilities config: ${error}`);
-    return { android: {}, ios: {}, general: {} };
-  }
 }
 
 /**
@@ -224,14 +251,36 @@ export function getPortFromUrl(url: URL): number {
 }
 
 /**
+ * Load capabilities configuration from file if specified in environment
+ */
+async function loadCapabilitiesConfig(): Promise<CapabilitiesConfig> {
+  const configPath = process.env.CAPABILITIES_CONFIG;
+  if (!configPath) {
+    return { android: {}, ios: {}, general: {} };
+  }
+
+  try {
+    await access(configPath, constants.F_OK);
+    const configContent = await readFile(configPath, 'utf8');
+    return JSON.parse(configContent);
+  } catch (error) {
+    log.warn(`Failed to parse capabilities config: ${error}`);
+    return { android: {}, ios: {}, general: {} };
+  }
+}
+
+/**
  * Create the appropriate driver instance for the given platform
  */
-async function createDriverForPlatform(platform: 'android' | 'ios'): Promise<any> {
+async function createDriverForPlatform(
+  platform: 'android' | 'ios'
+): Promise<any> {
   // Lazy-import the heavy Appium mobile drivers only when a mobile session is
   // actually created — importing them eagerly cost ~2-3s at every server start
   // (they pull the whole Appium stack), pointless for the browser-first path.
   if (platform === 'android') {
-    const { AndroidUiautomator2Driver } = await import('appium-uiautomator2-driver');
+    const { AndroidUiautomator2Driver } =
+      await import('appium-uiautomator2-driver');
     const driver = new AndroidUiautomator2Driver({} as any);
     driver.relaxedSecurityEnabled = true;
     return driver;
@@ -261,48 +310,6 @@ async function createDriverSession(
   });
   // Appium drivers return [sessionId, caps], extract just the session ID
   return Array.isArray(result) ? result[0] : result;
-}
-
-/**
- * Registers a tool for creating a new mobile session with Android or iOS devices.
- *
- * This function adds a 'create_session' tool to the provided server that handles
- * mobile session creation with support for both local and remote Appium servers.
- *
- * @param server - The server instance to which the create_session tool will be added
- *
- * @tool create_session
- * @description Creates a new mobile session with Android or iOS device. Requires prior
- * platform selection via the select_platform tool. Supports both local and remote
- * Appium server connections.
- *
- * @param {Object} args - Tool execution arguments
- * @param {'ios' | 'android'} args.platform - REQUIRED. The target platform, must match
- * the platform explicitly selected via select_platform tool
- * @param {Object} [args.capabilities] - Optional custom W3C format capabilities
- * @param {string} [args.remoteServerUrl] - Optional remote Appium server URL
- * (e.g., http://localhost:4723). If not provided, uses local Appium server
- *
- * @returns {Promise<Object>} Response object containing:
- * - text: Success message with session ID and device details
- * - ui: Interactive session dashboard UI component
- *
- * @throws {Error} If session creation fails or platform capabilities cannot be loaded
- *
- * @example
- * // Register the tool
- * createSession(server);
- */
-export interface WebSessionOptions {
-  browser?: string;
-  /** Default true. */
-  headless?: boolean;
-  url?: string;
-  viewport?: { width: number; height: number };
-  /** Cookies and localStorage for a launched browser (not used when attached to the user's). */
-  storageState?: Awaited<ReturnType<BrowserContext['storageState']>>;
-  /** Called if attaching to the user's Chrome is slow, most likely waiting on its Allow prompt. */
-  onWaiting?: (message: string) => void;
 }
 
 /** Long enough for a person to find Chrome's Allow prompt and click it. */
@@ -435,26 +442,31 @@ export async function openWebSession(opts: WebSessionOptions) {
         const vp = await ctx.newCDPSession(pg);
         await vp.send('Emulation.clearDeviceMetricsOverride');
         await vp.detach().catch(() => {});
-      } catch { /* best-effort */ }
+      } catch {
+        /* best-effort */
+      }
       try {
         const port = new URL(cdpEndpoint).port;
         const dir = port ? await profileDirForPort(port) : undefined;
         const names = dir ? await openProfileNames(dir) : [];
         const profiles = await countProfiles(b);
-        attachedInfo = [
-          `Chrome ${b.version()}` +
-            (names.length ? `, profiles open: ${names.join(', ')}` : ''),
-          profiles > 1
-            ? `Tabs are in ${profiles} profiles: playwright_list_tabs groups them, and playwright_new_tab opens in the profile of the AI-active tab (or pass sameProfileAs)`
-            : '',
-          relay.stuckTargets.size
-            ? `${relay.stuckTargets.size} tab(s) or frame(s) did not respond during setup (often tabs Chrome has frozen); playwright_list_tabs marks them "(not responding)"`
-            : '',
-          reused ? 'Reused the existing connection, no Allow prompt' : '',
-        ]
-          .filter(Boolean)
-          .join('. ') + '.';
-      } catch { /* description only */ }
+        attachedInfo =
+          [
+            `Chrome ${b.version()}` +
+              (names.length ? `, profiles open: ${names.join(', ')}` : ''),
+            profiles > 1
+              ? `Tabs are in ${profiles} profiles: playwright_list_tabs groups them, and playwright_new_tab opens in the profile of the AI-active tab (or pass sameProfileAs)`
+              : '',
+            relay.stuckTargets.size
+              ? `${relay.stuckTargets.size} tab(s) or frame(s) did not respond during setup (often tabs Chrome has frozen); playwright_list_tabs marks them "(not responding)"`
+              : '',
+            reused ? 'Reused the existing connection, no Allow prompt' : '',
+          ]
+            .filter(Boolean)
+            .join('. ') + '.';
+      } catch {
+        /* description only */
+      }
     } catch (e) {
       const reason = explainAttachError(
         e as Error,
@@ -528,8 +540,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     // "controlled by automated software" banner, and mask the
     // remaining automation fingerprints via an init script.
     // Set APPIUM_MCP_STEALTH=0 to opt back into plain launch.
-    const stealth =
-      isChromium && process.env.APPIUM_MCP_STEALTH !== '0';
+    const stealth = isChromium && process.env.APPIUM_MCP_STEALTH !== '0';
 
     if (stealth) {
       const launchOpts = {
@@ -620,7 +631,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     browser,
     context,
     page,
-    attachedToUserBrowser,
+    attachedToUserBrowser
   );
   const sessionId = `pw-${Date.now()}`;
   const webCapabilities = {
@@ -648,9 +659,7 @@ export async function openWebSession(opts: WebSessionOptions) {
   // The attached browser outlives the session, so don't leave the listener behind.
   pwDriver.onDelete = () => browser.off('disconnected', onDisconnected);
 
-  log.info(
-    `WEB session created successfully with ID: ${sessionId}`
-  );
+  log.info(`WEB session created successfully with ID: ${sessionId}`);
 
   return {
     sessionId,
@@ -716,7 +725,9 @@ export default function createSession(server: any): void {
         ),
       headless: z
         .preprocess((val) => {
-          if (typeof val === 'string') return val.toLowerCase() !== 'false';
+          if (typeof val === 'string') {
+            return val.toLowerCase() !== 'false';
+          }
           return val;
         }, z.boolean())
         .optional()
@@ -787,7 +798,10 @@ export default function createSession(server: any): void {
           // very noisy for the user. Suppress the UI resource when
           // APPIUM_MCP_NO_UI is set, or implicitly when CDP-attach mode is
           // active (ai-colleague case).
-          if (process.env.APPIUM_MCP_NO_UI || process.env.APPIUM_MCP_CDP_ENDPOINT) {
+          if (
+            process.env.APPIUM_MCP_NO_UI ||
+            process.env.APPIUM_MCP_CDP_ENDPOINT
+          ) {
             return textResponse;
           }
 

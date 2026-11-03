@@ -46,7 +46,9 @@ describe('user activity', () => {
     userDoes('clicked', 'button "Save"');
     const seen = takeUserEvents();
     expect(seen.map((e) => e.detail)).toEqual(['button "Save"']);
-    expect(formatUserEvents(seen)).toMatch(/clicked button "Save" \(example\.com\/a\)/);
+    expect(formatUserEvents(seen)).toMatch(
+      /clicked button "Save" \(example\.com\/a\)/
+    );
     expect(takeUserEvents()).toEqual([]);
   });
 

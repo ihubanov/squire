@@ -26,12 +26,6 @@ const STUCK_MS = 8_000;
 /** A tab session counts as new for this long after it attaches. */
 const INIT_WINDOW_MS = 30_000;
 
-interface Pending {
-  sessionId?: string;
-  method: string;
-  timer?: NodeJS.Timeout;
-}
-
 export interface CdpRelay {
   /** ws:// URL Playwright should connect to. */
   readonly url: string;
@@ -43,14 +37,10 @@ export interface CdpRelay {
   onClose(cb: () => void): void;
 }
 
-function trace(line: string): void {
-  const file = process.env.APPIUM_MCP_CDP_TRACE;
-  if (!file) return;
-  try {
-    appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
-  } catch {
-    /* tracing is best-effort */
-  }
+interface Pending {
+  sessionId?: string;
+  method: string;
+  timer?: NodeJS.Timeout;
 }
 
 /**
@@ -73,7 +63,11 @@ export async function openCdpRelay(
     const waiting = setTimeout(() => onWaiting?.(), 3000);
     const timer = setTimeout(() => {
       upstream.terminate();
-      reject(new Error(`Timeout ${timeoutMs}ms waiting for Chrome to accept the connection`));
+      reject(
+        new Error(
+          `Timeout ${timeoutMs}ms waiting for Chrome to accept the connection`
+        )
+      );
     }, timeoutMs);
     upstream.once('open', () => {
       clearTimeout(timer);
@@ -88,7 +82,11 @@ export async function openCdpRelay(
   });
   trace(`upstream open ${upstreamUrl}`);
 
-  const server = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: 256 * 1024 * 1024 });
+  const server = new WebSocketServer({
+    host: '127.0.0.1',
+    port: 0,
+    maxPayload: 256 * 1024 * 1024,
+  });
   await new Promise<void>((r) => server.once('listening', () => r()));
   const port = (server.address() as AddressInfo).port;
 
@@ -102,18 +100,28 @@ export async function openCdpRelay(
   let open = true;
 
   const send = (ws: WebSocket | undefined, msg: unknown) => {
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(msg));
+    }
   };
 
   const shutdown = () => {
-    if (!open) return;
+    if (!open) {
+      return;
+    }
     open = false;
     trace('relay closed');
-    for (const p of pending.values()) clearTimeout(p.timer);
+    for (const p of pending.values()) {
+      clearTimeout(p.timer);
+    }
     client?.close();
     server.close();
-    if (upstream.readyState === WebSocket.OPEN) upstream.close();
-    for (const cb of closeCbs) cb();
+    if (upstream.readyState === WebSocket.OPEN) {
+      upstream.close();
+    }
+    for (const cb of closeCbs) {
+      cb();
+    }
   };
   upstream.on('close', shutdown);
   upstream.on('error', shutdown);
@@ -132,18 +140,30 @@ export async function openCdpRelay(
     }
     if (msg.id !== undefined) {
       const p = pending.get(msg.id);
-      if (!p) return; // already answered by the stuck-tab guard
+      if (!p) {
+        return;
+      } // already answered by the stuck-tab guard
       clearTimeout(p.timer);
       pending.delete(msg.id);
-    } else if (msg.method === 'Target.attachedToTarget' && msg.params?.sessionId) {
+    } else if (
+      msg.method === 'Target.attachedToTarget' &&
+      msg.params?.sessionId
+    ) {
       sessionsBorn.set(msg.params.sessionId, Date.now());
       if (msg.params.targetInfo?.targetId) {
         sessionTarget.set(msg.params.sessionId, msg.params.targetInfo.targetId);
       }
-    } else if (msg.method === 'Target.detachedFromTarget' && msg.params?.sessionId) {
+    } else if (
+      msg.method === 'Target.detachedFromTarget' &&
+      msg.params?.sessionId
+    ) {
       sessionsBorn.delete(msg.params.sessionId);
     }
-    if (msg.method) trace(`<- ${msg.method}${msg.sessionId ? ' @' + msg.sessionId.slice(0, 6) : ''}`);
+    if (msg.method) {
+      trace(
+        `<- ${msg.method}${msg.sessionId ? ' @' + msg.sessionId.slice(0, 6) : ''}`
+      );
+    }
     client?.send(data.toString());
   });
 
@@ -167,34 +187,55 @@ export async function openCdpRelay(
       const bornAt = msg.sessionId ? born.get(msg.sessionId) : undefined;
       if (bornAt !== undefined && Date.now() - bornAt < INIT_WINDOW_MS) {
         entry.timer = setTimeout(() => {
-          if (!pending.delete(msg.id)) return;
+          if (!pending.delete(msg.id)) {
+            return;
+          }
           const target = sessionTarget.get(msg.sessionId!) ?? msg.sessionId!;
           stuckTargets.add(target);
-          trace(`stuck ${msg.method} @${msg.sessionId!.slice(0, 6)} -> answered with error`);
+          trace(
+            `stuck ${msg.method} @${msg.sessionId!.slice(0, 6)} -> answered with error`
+          );
           send(ws, {
             id: msg.id,
             sessionId: msg.sessionId,
-            error: { code: -32000, message: `Squire: tab did not respond to ${msg.method}` },
+            error: {
+              code: -32000,
+              message: `Squire: tab did not respond to ${msg.method}`,
+            },
           });
         }, stuckMs);
       }
       pending.set(msg.id, entry);
-      trace(`-> ${msg.method}${msg.sessionId ? ' @' + msg.sessionId.slice(0, 6) : ''}`);
+      trace(
+        `-> ${msg.method}${msg.sessionId ? ' @' + msg.sessionId.slice(0, 6) : ''}`
+      );
       upstream.send(data.toString());
     });
     ws.on('close', () => {
-      if (client !== ws) return;
+      if (client !== ws) {
+        return;
+      }
       client = undefined;
-      for (const p of pending.values()) clearTimeout(p.timer);
+      for (const p of pending.values()) {
+        clearTimeout(p.timer);
+      }
       pending = new Map();
       // Detach the tab sessions this client left attached, so Chrome
       // stops treating those tabs as being debugged.
       let id = 2_000_000_000;
       for (const sessionId of born.keys()) {
-        send(upstream, { id: id++, method: 'Target.detachFromTarget', params: { sessionId } });
+        send(upstream, {
+          id: id++,
+          method: 'Target.detachFromTarget',
+          params: { sessionId },
+        });
       }
       born.clear();
-      send(upstream, { id: id++, method: 'Target.setAutoAttach', params: { autoAttach: false, waitForDebuggerOnStart: false } });
+      send(upstream, {
+        id: id++,
+        method: 'Target.setAutoAttach',
+        params: { autoAttach: false, waitForDebuggerOnStart: false },
+      });
       trace('client disconnected');
     });
   });
@@ -206,4 +247,16 @@ export async function openCdpRelay(
     close: shutdown,
     onClose: (cb) => closeCbs.push(cb),
   };
+}
+
+function trace(line: string): void {
+  const file = process.env.APPIUM_MCP_CDP_TRACE;
+  if (!file) {
+    return;
+  }
+  try {
+    appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
+  } catch {
+    /* tracing is best-effort */
+  }
 }

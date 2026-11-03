@@ -19,8 +19,9 @@ import { profileLabels } from '../user-profiles.js';
 function fakeBrowser() {
   const b = new EventEmitter() as EventEmitter & { connected: boolean };
   b.connected = true;
-  return Object.assign(b, { isConnected: () => b.connected }) as unknown as
-    Browser & EventEmitter & { connected: boolean };
+  return Object.assign(b, {
+    isConnected: () => b.connected,
+  }) as unknown as Browser & EventEmitter & { connected: boolean };
 }
 
 describe('getUserBrowser', () => {
@@ -29,7 +30,10 @@ describe('getUserBrowser', () => {
   test('reuses one connection across sessions', async () => {
     let calls = 0;
     const b = fakeBrowser();
-    const connect = async () => { calls++; return b; };
+    const connect = async () => {
+      calls++;
+      return b;
+    };
     const first = await getUserBrowser('ws://x', connect);
     const second = await getUserBrowser('ws://x', connect);
     expect(calls).toBe(1);
@@ -40,7 +44,10 @@ describe('getUserBrowser', () => {
 
   test('concurrent callers share one connect', async () => {
     let calls = 0;
-    const connect = async () => { calls++; return fakeBrowser(); };
+    const connect = async () => {
+      calls++;
+      return fakeBrowser();
+    };
     const [a, b] = await Promise.all([
       getUserBrowser('ws://x', connect),
       getUserBrowser('ws://x', connect),
@@ -51,7 +58,10 @@ describe('getUserBrowser', () => {
 
   test('reconnects after the connection drops', async () => {
     let calls = 0;
-    const connect = async () => { calls++; return fakeBrowser(); };
+    const connect = async () => {
+      calls++;
+      return fakeBrowser();
+    };
     const { browser } = await getUserBrowser('ws://x', connect);
     (browser as unknown as { connected: boolean }).connected = false;
     (browser as unknown as EventEmitter).emit('disconnected');
@@ -64,7 +74,9 @@ describe('getUserBrowser', () => {
     let calls = 0;
     const connect = async () => {
       calls++;
-      if (calls === 1) throw new Error('nope');
+      if (calls === 1) {
+        throw new Error('nope');
+      }
       return fakeBrowser();
     };
     await expect(getUserBrowser('ws://x', connect)).rejects.toThrow('nope');
@@ -88,7 +100,12 @@ describe('explainAttachError', () => {
   });
 
   test('nothing listening and no port file', () => {
-    const msg = explainAttachError(refused, 'http://localhost:9222', 'http://localhost:9222', 90_000);
+    const msg = explainAttachError(
+      refused,
+      'http://localhost:9222',
+      'http://localhost:9222',
+      90_000
+    );
     expect(msg).toMatch(/nothing is listening/);
   });
 
@@ -106,12 +123,18 @@ describe('explainAttachError', () => {
 
 describe('profile names', () => {
   const dir = mkdtempSync(join(tmpdir(), 'chrome-'));
-  writeFileSync(join(dir, 'DevToolsActivePort'), '9222\n/devtools/browser/abc\n');
+  writeFileSync(
+    join(dir, 'DevToolsActivePort'),
+    '9222\n/devtools/browser/abc\n'
+  );
   writeFileSync(
     join(dir, 'Local State'),
     JSON.stringify({
       profile: {
-        info_cache: { Default: { name: 'IFS-Gmail' }, 'Profile 1': { name: 'Alpha (bart)' } },
+        info_cache: {
+          Default: { name: 'IFS-Gmail' },
+          'Profile 1': { name: 'Alpha (bart)' },
+        },
         last_active_profiles: ['Profile 1', 'Default'],
       },
     })
@@ -119,7 +142,9 @@ describe('profile names', () => {
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
   test('finds the profile dir by port', async () => {
-    expect(await profileDirForPort('9222', [join(dir, 'missing'), dir])).toBe(dir);
+    expect(await profileDirForPort('9222', [join(dir, 'missing'), dir])).toBe(
+      dir
+    );
     expect(await profileDirForPort('9333', [dir])).toBeUndefined();
   });
 

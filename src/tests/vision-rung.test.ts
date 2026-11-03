@@ -12,7 +12,15 @@
  * its ping/ground protocol is smoke-tested against real tesseract in the
  * sidecar script check).
  */
-import { describe, test, expect, beforeAll, beforeEach, afterAll, jest } from '@jest/globals';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterAll,
+  jest,
+} from '@jest/globals';
 
 await jest.unstable_mockModule('../activity-log', () => ({
   logActivity: jest.fn(async () => {}),
@@ -21,7 +29,12 @@ await jest.unstable_mockModule('../activity-log', () => ({
 // Mock ONLY the grounding client — the ladder logic under test stays real.
 await jest.unstable_mockModule('../vision-grounding.js', () => ({
   groundLabelOnPage: jest.fn(async () => ({
-    x: 100, y: 200, w: 120, h: 40, text: 'Sign in', backend: 'tesseract-mock',
+    x: 100,
+    y: 200,
+    w: 120,
+    h: 40,
+    text: 'Sign in',
+    backend: 'tesseract-mock',
   })),
   visionBackends: jest.fn(async () => ['tesseract']),
 }));
@@ -30,11 +43,13 @@ const { chromium } = await import('playwright');
 const { runScript } = await import('../human-driver.js');
 const { groundLabelOnPage } = await import('../vision-grounding.js');
 
-const html = `<!doctype html><html><body>
+const html =
+  `<!doctype html><html><body>
 <div style="width:100vw;height:100vh" onclick="window.__click=(window.__click||0)+1">page</div>
 <script>document.addEventListener('click', e => {
   window.__lastClick = [e.clientX, e.clientY];
-});</` + `script>
+});</` +
+  `script>
 </body></html>`;
 
 let browser: import('playwright').Browser;
@@ -54,7 +69,9 @@ afterAll(async () => {
 });
 
 async function freshPage(): Promise<import('playwright').Page> {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  const page = await browser.newPage({
+    viewport: { width: 1280, height: 720 },
+  });
   await page.setContent(html);
   return page;
 }
@@ -73,13 +90,15 @@ describe('vision rung (mocked sidecar)', () => {
           },
           { action: 'eval', script: 'window.__lastClick' },
         ],
-        { stepTimeout: 700, humanize: 'auto' },
+        { stepTimeout: 700, humanize: 'auto' }
       );
       expect(res.finished).toBe(true);
       expect(res.results[0]!.status).toBe('ok');
       expect(res.results[0]!.via).toBe('vision');
       // Clicked the CENTER of the mocked region (100+120/2, 200+40/2).
-      expect(await page.evaluate(() => (window as any).__lastClick)).toEqual([160, 220]);
+      expect(await page.evaluate(() => (window as any).__lastClick)).toEqual([
+        160, 220,
+      ]);
       expect(groundLabelOnPage).toHaveBeenCalledWith(page, 'Sign in');
     } finally {
       await page.close();
@@ -92,7 +111,7 @@ describe('vision rung (mocked sidecar)', () => {
       const res = await runScript(
         page,
         [{ action: 'click', selector: '#not-in-dom' }],
-        { stepTimeout: 500, humanize: 'auto' },
+        { stepTimeout: 500, humanize: 'auto' }
       );
       expect(res.finished).toBe(false);
       const failed = res.results[0]!;
@@ -105,18 +124,24 @@ describe('vision rung (mocked sidecar)', () => {
   }, 30_000);
 
   test('vision miss (null region) propagates the human-path error', async () => {
-    (groundLabelOnPage as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(null);
+    (
+      groundLabelOnPage as unknown as {
+        mockResolvedValueOnce: (v: unknown) => void;
+      }
+    ).mockResolvedValueOnce(null);
     const page = await freshPage();
     try {
       const res = await runScript(
         page,
         [{ action: 'click', selector: '#not-in-dom', visual: 'Nothing' }],
-        { stepTimeout: 500, humanize: 'auto' },
+        { stepTimeout: 500, humanize: 'auto' }
       );
       expect(res.finished).toBe(false);
       expect(res.results[0]!.status).toBe('failed');
       // No click happened — vision never fired.
-      expect(await page.evaluate(() => (window as any).__lastClick)).toBeUndefined();
+      expect(
+        await page.evaluate(() => (window as any).__lastClick)
+      ).toBeUndefined();
     } finally {
       await page.close();
     }

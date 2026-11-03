@@ -80,47 +80,6 @@ const _transformLocator = (
   return { strategy, selector };
 };
 
-async function performAndroidScroll(
-  driver: any,
-  _args: any,
-  direction: string
-): Promise<void> {
-  // Use UiAutomator scroll gestures for Android
-  const scrollDirection =
-    direction === 'up' ? 'scrollBackward' : 'scrollForward';
-  const scrollCommand = `new UiScrollable(new UiSelector().scrollable(true)).${scrollDirection}()`;
-
-  try {
-    await driver.findElement('-android uiautomator', scrollCommand);
-  } catch (_error) {
-    // If UiScrollable fails, try touch actions
-    const { width, height } = await driver.getWindowRect();
-    const startX = width / 2;
-    const startY = direction === 'up' ? height * 0.3 : height * 0.7;
-    const endY = direction === 'up' ? height * 0.7 : height * 0.3;
-
-    await driver.touchAction([
-      { action: 'press', x: startX, y: startY },
-      { action: 'wait', ms: 500 },
-      { action: 'moveTo', x: startX, y: endY },
-      { action: 'release' },
-    ]);
-  }
-}
-
-async function performiOSScroll(driver: any, direction: string): Promise<void> {
-  // Use iOS mobile commands for scrolling
-  const { width, height } = await driver.getWindowRect();
-
-  await driver.execute('mobile: scroll', {
-    direction,
-    startX: width / 2,
-    startY: direction === 'up' ? height * 0.3 : height * 0.7,
-    endX: width / 2,
-    endY: direction === 'up' ? height * 0.7 : height * 0.3,
-  });
-}
-
 export default function scrollToElement(server: any): void {
   server.addTool({
     name: 'appium_scroll_to_element',
@@ -194,5 +153,46 @@ export default function scrollToElement(server: any): void {
         };
       }
     },
+  });
+}
+
+async function performAndroidScroll(
+  driver: any,
+  _args: any,
+  direction: string
+): Promise<void> {
+  // Use UiAutomator scroll gestures for Android
+  const scrollDirection =
+    direction === 'up' ? 'scrollBackward' : 'scrollForward';
+  const scrollCommand = `new UiScrollable(new UiSelector().scrollable(true)).${scrollDirection}()`;
+
+  try {
+    await driver.findElement('-android uiautomator', scrollCommand);
+  } catch (_error) {
+    // If UiScrollable fails, try touch actions
+    const { width, height } = await driver.getWindowRect();
+    const startX = width / 2;
+    const startY = direction === 'up' ? height * 0.3 : height * 0.7;
+    const endY = direction === 'up' ? height * 0.7 : height * 0.3;
+
+    await driver.touchAction([
+      { action: 'press', x: startX, y: startY },
+      { action: 'wait', ms: 500 },
+      { action: 'moveTo', x: startX, y: endY },
+      { action: 'release' },
+    ]);
+  }
+}
+
+async function performiOSScroll(driver: any, direction: string): Promise<void> {
+  // Use iOS mobile commands for scrolling
+  const { width, height } = await driver.getWindowRect();
+
+  await driver.execute('mobile: scroll', {
+    direction,
+    startX: width / 2,
+    startY: direction === 'up' ? height * 0.3 : height * 0.7,
+    endX: width / 2,
+    endY: direction === 'up' ? height * 0.7 : height * 0.3,
   });
 }

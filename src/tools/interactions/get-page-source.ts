@@ -11,17 +11,6 @@ import {
 } from '../../ui/mcp-ui-utils.js';
 import { getPageSource as _getPageSource } from '../../command.js';
 
-// Preview size cap (characters). Page source for a real web app can be 100k+
-// characters, which blows the host's per-tool output token limit and gets
-// truncated-and-dumped-to-file by the client anyway. We instead save the FULL
-// source to a file ourselves and inline only a capped preview, so nothing is
-// lost (the model can Read the file for the rest) and the response stays small.
-// Override with APPIUM_MCP_PAGE_SOURCE_MAX.
-function previewLimit(): number {
-  const raw = Number(process.env.APPIUM_MCP_PAGE_SOURCE_MAX);
-  return Number.isFinite(raw) && raw > 0 ? raw : 60000;
-}
-
 export default function getPageSource(server: FastMCP): void {
   const pageSourceSchema = z.object({});
   server.addTool({
@@ -111,4 +100,15 @@ export default function getPageSource(server: FastMCP): void {
       }
     },
   });
+}
+
+// Preview size cap (characters). Page source for a real web app can be 100k+
+// characters, which blows the host's per-tool output token limit and gets
+// truncated-and-dumped-to-file by the client anyway. We instead save the FULL
+// source to a file ourselves and inline only a capped preview, so nothing is
+// lost (the model can Read the file for the rest) and the response stays small.
+// Override with APPIUM_MCP_PAGE_SOURCE_MAX.
+function previewLimit(): number {
+  const raw = Number(process.env.APPIUM_MCP_PAGE_SOURCE_MAX);
+  return Number.isFinite(raw) && raw > 0 ? raw : 60000;
 }

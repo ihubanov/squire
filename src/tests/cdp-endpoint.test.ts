@@ -18,8 +18,14 @@ let discoveryPort: number;
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), 'cdp-'));
   other = mkdtempSync(join(tmpdir(), 'cdp-'));
-  writeFileSync(join(dir, 'DevToolsActivePort'), '9333\n/devtools/browser/abc-123\n');
-  writeFileSync(join(other, 'DevToolsActivePort'), '9444\n/devtools/browser/zzz\n');
+  writeFileSync(
+    join(dir, 'DevToolsActivePort'),
+    '9333\n/devtools/browser/abc-123\n'
+  );
+  writeFileSync(
+    join(other, 'DevToolsActivePort'),
+    '9444\n/devtools/browser/zzz\n'
+  );
   // A Chrome launched with --remote-debugging-port answers /json/version.
   server = http.createServer((req, res) => {
     res.statusCode = req.url === '/json/version' ? 200 : 404;
@@ -53,14 +59,17 @@ describe('resolveCdpEndpoint', () => {
   });
 
   test('ignores a DevToolsActivePort for a different port', async () => {
-    expect(await resolveCdpEndpoint('http://127.0.0.1:9555', [dir, other])).toBe(
-      'http://127.0.0.1:9555'
-    );
+    expect(
+      await resolveCdpEndpoint('http://127.0.0.1:9555', [dir, other])
+    ).toBe('http://127.0.0.1:9555');
   });
 
   test('skips missing profile directories', async () => {
     expect(
-      await resolveCdpEndpoint('http://127.0.0.1:9333', [join(dir, 'nope'), dir])
+      await resolveCdpEndpoint('http://127.0.0.1:9333', [
+        join(dir, 'nope'),
+        dir,
+      ])
     ).toBe('ws://127.0.0.1:9333/devtools/browser/abc-123');
   });
 });

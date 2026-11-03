@@ -1,4 +1,4 @@
-import { FastMCP } from 'fastmcp';
+import type { FastMCP } from 'fastmcp';
 import { getDriver } from '../../session-store.js';
 import { z } from 'zod';
 import { activateApp as _activateApp } from '../../command.js';

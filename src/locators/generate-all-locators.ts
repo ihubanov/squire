@@ -2,8 +2,10 @@
 // Using existing functions from src/locators directory
 
 import { getSuggestedLocators } from './locator-generation.js';
-import { xmlToJSON, JSONElement } from './source-parsing.js';
-import { shouldIncludeElement, FilterOptions } from './element-filter.js';
+import type { JSONElement } from './source-parsing.js';
+import { xmlToJSON } from './source-parsing.js';
+import type { FilterOptions } from './element-filter.js';
+import { shouldIncludeElement } from './element-filter.js';
 import log from '../logger.js';
 
 export interface ElementWithLocators {
@@ -15,6 +17,38 @@ export interface ElementWithLocators {
   clickable: boolean;
   enabled: boolean;
   displayed: boolean;
+}
+
+/**
+ * Main function to generate locators for all elements from sourceXML
+ *
+ * @param sourceXML - The XML page source to process
+ * @param isNative - Whether this is a native context
+ * @param automationName - The automation driver name (uiautomator2, xcuitest, etc.)
+ * @param filters - Optional filters to apply when selecting elements
+ * @returns Array of elements with their generated locators
+ */
+export function generateAllElementLocators(
+  sourceXML: string,
+  isNative: boolean = true,
+  automationName: string,
+  filters: FilterOptions = {}
+): ElementWithLocators[] {
+  const sourceJSON = xmlToJSON(sourceXML);
+  const results: ElementWithLocators[] = [];
+
+  if (sourceJSON) {
+    traverseAndProcessElements(
+      sourceJSON,
+      sourceXML,
+      isNative,
+      automationName,
+      filters,
+      results
+    );
+  }
+
+  return results;
 }
 
 /**
@@ -114,36 +148,4 @@ function traverseAndProcessElements(
       )
     );
   }
-}
-
-/**
- * Main function to generate locators for all elements from sourceXML
- *
- * @param sourceXML - The XML page source to process
- * @param isNative - Whether this is a native context
- * @param automationName - The automation driver name (uiautomator2, xcuitest, etc.)
- * @param filters - Optional filters to apply when selecting elements
- * @returns Array of elements with their generated locators
- */
-export function generateAllElementLocators(
-  sourceXML: string,
-  isNative: boolean = true,
-  automationName: string,
-  filters: FilterOptions = {}
-): ElementWithLocators[] {
-  const sourceJSON = xmlToJSON(sourceXML);
-  const results: ElementWithLocators[] = [];
-
-  if (sourceJSON) {
-    traverseAndProcessElements(
-      sourceJSON,
-      sourceXML,
-      isNative,
-      automationName,
-      filters,
-      results
-    );
-  }
-
-  return results;
 }

@@ -11,9 +11,11 @@ import { logActivity } from '../../activity-log.js';
 
 export function type(server: FastMCP): void {
   const typeSchema = z.object({
-    elementUUID: elementUUIDScheme.optional().describe(
-      'Optional UUID of the element to type into. If not provided, types into the currently focused element.'
-    ),
+    elementUUID: elementUUIDScheme
+      .optional()
+      .describe(
+        'Optional UUID of the element to type into. If not provided, types into the currently focused element.'
+      ),
     text: z.string().describe('The text to type character by character'),
     delay: z
       .number()
@@ -55,7 +57,12 @@ export function type(server: FastMCP): void {
         } else {
           await driver.page.keyboard.type(args.text, { delay: args.delay });
         }
-        logActivity({ tool: 'playwright_type', tab: driver.page.url(), status: 'ok', detail: args.text.slice(0, 60) });
+        logActivity({
+          tool: 'playwright_type',
+          tab: driver.page.url(),
+          status: 'ok',
+          detail: args.text.slice(0, 60),
+        });
 
         return {
           content: [
@@ -113,7 +120,12 @@ export function pressKey(server: FastMCP): void {
 
       try {
         await driver.page.keyboard.press(args.key);
-        logActivity({ tool: 'playwright_press_key', tab: driver.page.url(), status: 'ok', detail: args.key });
+        logActivity({
+          tool: 'playwright_press_key',
+          tab: driver.page.url(),
+          status: 'ok',
+          detail: args.key,
+        });
         return {
           content: [
             {

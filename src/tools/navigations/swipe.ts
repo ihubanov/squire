@@ -9,110 +9,6 @@ import {
   performActions,
 } from '../../command.js';
 
-function calculateSwipeCoordinates(
-  direction: 'left' | 'right' | 'up' | 'down',
-  width: number,
-  height: number
-): { startX: number; startY: number; endX: number; endY: number } {
-  const centerX = Math.floor(width / 2);
-  const centerY = Math.floor(height / 2);
-
-  switch (direction) {
-    case 'left':
-      return {
-        startX: Math.floor(width * 0.8),
-        startY: centerY,
-        endX: Math.floor(width * 0.2),
-        endY: centerY,
-      };
-    case 'right':
-      return {
-        startX: Math.floor(width * 0.2),
-        startY: centerY,
-        endX: Math.floor(width * 0.8),
-        endY: centerY,
-      };
-    case 'up':
-      return {
-        startX: centerX,
-        startY: Math.floor(height * 0.8),
-        endX: centerX,
-        endY: Math.floor(height * 0.2),
-      };
-    case 'down':
-      return {
-        startX: centerX,
-        startY: Math.floor(height * 0.2),
-        endX: centerX,
-        endY: Math.floor(height * 0.8),
-      };
-    default:
-      throw new Error(`Invalid direction: ${direction}`);
-  }
-}
-
-async function performAndroidSwipe(
-  driver: any,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  duration: number
-): Promise<void> {
-  await driver.performActions([
-    {
-      type: 'pointer',
-      id: 'finger1',
-      parameters: { pointerType: 'touch' },
-      actions: [
-        { type: 'pointerMove', duration: 0, x: startX, y: startY },
-        { type: 'pointerDown', button: 0 },
-        { type: 'pause', duration: 250 },
-        { type: 'pointerMove', duration, x: endX, y: endY },
-        { type: 'pointerUp', button: 0 },
-      ],
-    },
-  ]);
-}
-
-async function performiOSSwipe(
-  driver: any,
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  duration: number
-): Promise<void> {
-  try {
-    await execute(driver, 'mobile: dragFromToForDuration', {
-      fromX: startX,
-      fromY: startY,
-      toX: endX,
-      toY: endY,
-      duration: duration / 1000,
-    });
-    log.info('iOS swipe completed using mobile: dragFromToForDuration');
-  } catch (_dragError) {
-    log.info('mobile: dragFromToForDuration failed, trying performActions');
-    await driver.performActions([
-      {
-        type: 'pointer',
-        id: 'finger1',
-        parameters: { pointerType: 'touch' },
-        actions: [
-          { type: 'pointerMove', duration: 0, x: startX, y: startY },
-          { type: 'pointerDown', button: 0 },
-          { type: 'pause', duration: 200 },
-          { type: 'pointerMove', duration, x: endX, y: endY },
-          { type: 'pause', duration: 50 },
-          { type: 'pointerUp', button: 0 },
-        ],
-      },
-    ]);
-    log.info('iOS swipe completed using performActions');
-  }
-}
-
 export default function swipe(server: any): void {
   server.addTool({
     name: 'appium_swipe',
@@ -361,4 +257,108 @@ export default function swipe(server: any): void {
       }
     },
   });
+}
+
+function calculateSwipeCoordinates(
+  direction: 'left' | 'right' | 'up' | 'down',
+  width: number,
+  height: number
+): { startX: number; startY: number; endX: number; endY: number } {
+  const centerX = Math.floor(width / 2);
+  const centerY = Math.floor(height / 2);
+
+  switch (direction) {
+    case 'left':
+      return {
+        startX: Math.floor(width * 0.8),
+        startY: centerY,
+        endX: Math.floor(width * 0.2),
+        endY: centerY,
+      };
+    case 'right':
+      return {
+        startX: Math.floor(width * 0.2),
+        startY: centerY,
+        endX: Math.floor(width * 0.8),
+        endY: centerY,
+      };
+    case 'up':
+      return {
+        startX: centerX,
+        startY: Math.floor(height * 0.8),
+        endX: centerX,
+        endY: Math.floor(height * 0.2),
+      };
+    case 'down':
+      return {
+        startX: centerX,
+        startY: Math.floor(height * 0.2),
+        endX: centerX,
+        endY: Math.floor(height * 0.8),
+      };
+    default:
+      throw new Error(`Invalid direction: ${direction}`);
+  }
+}
+
+async function performAndroidSwipe(
+  driver: any,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  duration: number
+): Promise<void> {
+  await driver.performActions([
+    {
+      type: 'pointer',
+      id: 'finger1',
+      parameters: { pointerType: 'touch' },
+      actions: [
+        { type: 'pointerMove', duration: 0, x: startX, y: startY },
+        { type: 'pointerDown', button: 0 },
+        { type: 'pause', duration: 250 },
+        { type: 'pointerMove', duration, x: endX, y: endY },
+        { type: 'pointerUp', button: 0 },
+      ],
+    },
+  ]);
+}
+
+async function performiOSSwipe(
+  driver: any,
+  startX: number,
+  startY: number,
+  endX: number,
+  endY: number,
+  duration: number
+): Promise<void> {
+  try {
+    await execute(driver, 'mobile: dragFromToForDuration', {
+      fromX: startX,
+      fromY: startY,
+      toX: endX,
+      toY: endY,
+      duration: duration / 1000,
+    });
+    log.info('iOS swipe completed using mobile: dragFromToForDuration');
+  } catch (_dragError) {
+    log.info('mobile: dragFromToForDuration failed, trying performActions');
+    await driver.performActions([
+      {
+        type: 'pointer',
+        id: 'finger1',
+        parameters: { pointerType: 'touch' },
+        actions: [
+          { type: 'pointerMove', duration: 0, x: startX, y: startY },
+          { type: 'pointerDown', button: 0 },
+          { type: 'pause', duration: 200 },
+          { type: 'pointerMove', duration, x: endX, y: endY },
+          { type: 'pause', duration: 50 },
+          { type: 'pointerUp', button: 0 },
+        ],
+      },
+    ]);
+    log.info('iOS swipe completed using performActions');
+  }
 }

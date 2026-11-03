@@ -40,7 +40,11 @@ export default function hover(server: FastMCP): void {
       try {
         const el = driver.requireElement(args.elementUUID);
         await el.hover();
-        logActivity({ tool: 'playwright_hover', tab: driver.page.url(), status: 'ok' });
+        logActivity({
+          tool: 'playwright_hover',
+          tab: driver.page.url(),
+          status: 'ok',
+        });
 
         return {
           content: [

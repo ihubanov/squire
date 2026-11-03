@@ -16,7 +16,17 @@ export type Check =
 
 export interface JudgeOk {
   ok: true;
-  results: Record<string, { kind: string; p_yes?: number; pick?: string; probs?: unknown; confidence?: number; value?: number }>;
+  results: Record<
+    string,
+    {
+      kind: string;
+      p_yes?: number;
+      pick?: string;
+      probs?: unknown;
+      confidence?: number;
+      value?: number;
+    }
+  >;
   usage?: unknown;
 }
 export interface JudgeErr {
@@ -39,16 +49,30 @@ export async function judge(opts: {
   timeoutMs?: number;
 }): Promise<JudgeResult> {
   if (!hunchEnabled()) {
-    return { ok: false, reason: 'hunch disabled or no backend configured (set SQUIRE_HUNCH_BACKEND_URL)' };
+    return {
+      ok: false,
+      reason:
+        'hunch disabled or no backend configured (set SQUIRE_HUNCH_BACKEND_URL)',
+    };
   }
   const h = await ensureHunch();
-  if (!h) return { ok: false, reason: 'hunch sidecar unavailable' };
+  if (!h) {
+    return { ok: false, reason: 'hunch sidecar unavailable' };
+  }
 
   const body: Record<string, unknown> = { checks: opts.checks };
-  if (opts.images?.length) body['images'] = opts.images;
-  if (opts.context) body['context'] = opts.context;
-  if (opts.model) body['model'] = opts.model;
-  if (opts.effort) body['effort'] = opts.effort;
+  if (opts.images?.length) {
+    body.images = opts.images;
+  }
+  if (opts.context) {
+    body.context = opts.context;
+  }
+  if (opts.model) {
+    body.model = opts.model;
+  }
+  if (opts.effort) {
+    body.effort = opts.effort;
+  }
 
   try {
     const r = await fetch(`${h.baseUrl}/v1/judge`, {
@@ -61,7 +85,10 @@ export async function judge(opts: {
       // 502/503 = backend down: fail closed, this is "unknown".
       return { ok: false, reason: `hunch ${r.status}` };
     }
-    const data = (await r.json()) as { results?: JudgeOk['results']; usage?: unknown };
+    const data = (await r.json()) as {
+      results?: JudgeOk['results'];
+      usage?: unknown;
+    };
     return { ok: true, results: data.results ?? {}, usage: data.usage };
   } catch (e) {
     return { ok: false, reason: (e as Error).message };
@@ -75,10 +102,17 @@ export async function judge(opts: {
  */
 export async function pYes(
   question: string,
-  opts: { image?: string; yesIf?: string; noIf?: string; context?: Record<string, unknown> } = {}
+  opts: {
+    image?: string;
+    yesIf?: string;
+    noIf?: string;
+    context?: Record<string, unknown>;
+  } = {}
 ): Promise<number | null> {
   const res = await judge({
-    checks: { q: { kind: 'yesno', question, yes_if: opts.yesIf, no_if: opts.noIf } },
+    checks: {
+      q: { kind: 'yesno', question, yes_if: opts.yesIf, no_if: opts.noIf },
+    },
     images: opts.image ? [opts.image] : undefined,
     context: opts.context,
   });
@@ -86,13 +120,23 @@ export async function pYes(
     log.info(`[hunch] pYes unknown: ${res.reason}`);
     return null;
   }
-  return res.results['q']?.p_yes ?? null;
+  return res.results.q?.p_yes ?? null;
 }
 
 /** Threshold verdict helper: act >= hi, fail < lo, else abstain. null → unknown. */
-export function verdict(p: number | null, hi = 0.9, lo = 0.5): 'yes' | 'no' | 'abstain' | 'unknown' {
-  if (p == null) return 'unknown';
-  if (p >= hi) return 'yes';
-  if (p < lo) return 'no';
+export function verdict(
+  p: number | null,
+  hi = 0.9,
+  lo = 0.5
+): 'yes' | 'no' | 'abstain' | 'unknown' {
+  if (p == null) {
+    return 'unknown';
+  }
+  if (p >= hi) {
+    return 'yes';
+  }
+  if (p < lo) {
+    return 'no';
+  }
   return 'abstain';
 }

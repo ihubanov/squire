@@ -124,222 +124,19 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((r) => setTimeout(r, ms));
 
 /**
- * Runs INSIDE the page. Force-reveals `el` and every ancestor (including
- * shadow hosts): unhide display/visibility/opacity, drop `hidden` and
- * `aria-hidden`, then scroll it into view. Returns its post-reveal rect.
- */
-function revealInPage(el: Element): { revealed: boolean; rect: DOMRect } {
-  let node: Element | null = el;
-  while (node && node !== document.documentElement) {
-    const style = (node as HTMLElement).style;
-    if (style) {
-      const cs = getComputedStyle(node);
-      if (cs.display === 'none') style.setProperty('display', 'block', 'important');
-      if (cs.visibility === 'hidden') style.setProperty('visibility', 'visible', 'important');
-      if (parseFloat(cs.opacity || '1') === 0) style.setProperty('opacity', '1', 'important');
-    }
-    if (node.hasAttribute('hidden')) node.removeAttribute('hidden');
-    if (node.getAttribute('aria-hidden') === 'true') node.removeAttribute('aria-hidden');
-    // Climb past shadow boundaries too.
-    const parent = node.parentElement;
-    if (parent) {
-      node = parent;
-    } else {
-      const root = node.getRootNode() as ShadowRoot | Document;
-      node = (root as ShadowRoot).host ?? null;
-    }
-  }
-  el.scrollIntoView({ block: 'center', inline: 'center' });
-  return { revealed: true, rect: el.getBoundingClientRect() };
-}
-
-/** Reveal the element a locator points at; best-effort. */
-async function reveal(page: Page, selector: string, timeout: number): Promise<unknown> {
-  const handle = await page.locator(selector).first().elementHandle({ timeout });
-  if (!handle) throw new Error(`No element matched "${selector}" to reveal`);
-  try {
-    return await handle.evaluate(revealInPage);
-  } finally {
-    await handle.dispose().catch(() => {});
-  }
-}
-
-/**
- * Execute a single actionable step, normal path first then human fallback.
- * Returns the path that worked. Throws only if both paths fail (or the
- * caller asked for `never` and normal failed).
- */
-async function runActionable(
-  page: Page,
-  step: Step,
-  humanize: Humanize,
-  timeout: number,
-): Promise<'normal' | 'human' | 'vision'> {
-  const sel = step.selector;
-  if (!sel) throw new Error(`Step "${step.action}" requires a selector`);
-  const locator = page.locator(sel).first();
-
-  const normal = async (): Promise<void> => {
-    switch (step.action) {
-      case 'fill':
-        await locator.fill(step.text ?? '', { timeout });
-        break;
-      case 'type':
-        await locator.pressSequentially(step.text ?? '', { timeout });
-        break;
-      case 'click':
-        await locator.click({ timeout });
-        break;
-      case 'hover':
-        await locator.hover({ timeout });
-        break;
-      case 'select':
-        await locator.selectOption(step.value as string | string[], { timeout });
-        break;
-      case 'scrollTo':
-        await locator.scrollIntoViewIfNeeded({ timeout });
-        break;
-      default:
-        throw new Error(`Not an actionable step: ${step.action}`);
-    }
-  };
-
-  const human = async (): Promise<void> => {
-    // Reveal first, then act slowly. Reveal failures shouldn't mask the
-    // real interaction error, so they're swallowed.
-    await reveal(page, sel, timeout).catch(() => {});
-    await sleep(jitter(120, 320));
-    switch (step.action) {
-      case 'fill':
-      case 'type': {
-        try {
-          await locator.click({ timeout, force: true });
-        } catch {
-          /* focus is best-effort */
-        }
-        await locator.pressSequentially(step.text ?? '', {
-          delay: jitter(40, 90),
-          timeout,
-        });
-        break;
-      }
-      case 'click': {
-        try {
-          await locator.click({ timeout, force: true });
-        } catch {
-          // Last resort: dispatch the click in-page (reaches nodes even
-          // pointer-events / overlays would block).
-          await locator.dispatchEvent('click', undefined, { timeout });
-        }
-        break;
-      }
-      case 'hover':
-        await locator.hover({ timeout, force: true });
-        break;
-      case 'select':
-        await locator.selectOption(step.value as string | string[], { timeout, force: true });
-        break;
-      case 'scrollTo':
-        await reveal(page, sel, timeout);
-        break;
-      default:
-        throw new Error(`Not an actionable step: ${step.action}`);
-    }
-  };
-
-  if (humanize === 'always') {
-    await human();
-    return 'human';
-  }
-  try {
-    await normal();
-    return 'normal';
-  } catch (err) {
-    if (looksLikeNavigation(err)) throw err; // let the caller absorb it
-    if (humanize === 'never') throw err;
-    try {
-      await human();
-      return 'human';
-    } catch (humanErr) {
-      if (looksLikeNavigation(humanErr)) throw humanErr;
-      // Vision rung: the DOM has nothing for this selector — the element
-      // may only exist as pixels (canvas, WebGL, embedded viewer, image).
-      // If the step names what it LOOKS like, ground that label on screen
-      // and act at the coordinates.
-      const vres = await actViaVision(page, step);
-      if (vres) return 'vision';
-      // No visual hint (or nothing matched): rethrow with guidance.
-      const notFound = /waiting for|not found|no element|does not exist/i.test(
-        humanErr instanceof Error ? humanErr.message : String(humanErr),
-      );
-      if (notFound && !step.visual) {
-        throw new Error(
-          `${humanErr instanceof Error ? humanErr.message : String(humanErr)} — ` +
-          `if the control is only rendered as pixels (canvas/WebGL/embedded ` +
-          `viewer/image), add a "visual" hint naming its visible label, e.g. ` +
-          `{"action":"click","selector":"...","visual":"Sign in"}.`,
-        );
-      }
-      throw humanErr;
-    }
-  }
-}
-
-/**
- * Final fallback rung: ground the step's `visual` label on screen (OCR/vision
- * sidecar) and act at the returned coordinates. Only click / fill / type are
- * vision-capable — hover/select need richer semantics than a pixel box gives.
- * Returns the rung's success, or null when it couldn't fire (no hint, no
- * match, vision disabled) so the caller falls back to rethrowing.
- */
-async function actViaVision(
-  page: Page,
-  step: Step,
-): Promise<boolean> {
-  if (!step.visual) return false;
-  if (step.action !== 'click' && step.action !== 'fill' && step.action !== 'type') {
-    return false;
-  }
-  const region = await groundLabelOnPage(page, step.visual);
-  if (!region) return false;
-  const cx = region.x + Math.floor(region.w / 2);
-  const cy = region.y + Math.floor(region.h / 2);
-  await page.mouse.click(cx, cy);
-  if (step.action === 'fill' || step.action === 'type') {
-    // Focus landed on whatever draws those pixels; type into it.
-    await page.keyboard.type(step.text ?? '', { delay: jitter(40, 90) });
-  }
-  return true;
-}
-
-/** Wait for a page state, a delay, or a navigation. */
-async function runWait(page: Page, step: Step, timeout: number): Promise<string> {
-  if (step.waitFor === 'navigation') {
-    await page.waitForLoadState('load', { timeout }).catch(() => {});
-    return 'navigation';
-  }
-  if (step.waitFor) {
-    await page.waitForLoadState(step.waitFor, { timeout });
-    return step.waitFor;
-  }
-  const ms = step.ms ?? 500;
-  await sleep(ms);
-  return `${ms}ms`;
-}
-
-/**
  * Run a script. Each step is guarded (protected-url + user-focus) against
  * the CURRENT page, re-checked after any navigation.
  */
 export async function runScript(
   page: Page,
   steps: Step[],
-  opts: RunOptions = {},
+  opts: RunOptions = {}
 ): Promise<RunResult> {
   const humanize = opts.humanize ?? 'auto';
   const stopOnError = opts.stopOnError ?? true;
   const timeout = opts.stepTimeout ?? 5000;
-  const pauseAfter = opts.pauseAfter && opts.pauseAfter > 0 ? opts.pauseAfter : 0;
+  const pauseAfter =
+    opts.pauseAfter && opts.pauseAfter > 0 ? opts.pauseAfter : 0;
 
   const results: StepResult[] = [];
   let completed = 0;
@@ -363,19 +160,28 @@ export async function runScript(
           res.detail = await runWait(page, step, timeout);
           break;
         case 'eval': {
-          if (!step.script) throw new Error('eval step requires `script`');
+          if (!step.script) {
+            throw new Error('eval step requires `script`');
+          }
           res.value = await page.evaluate(step.script);
           break;
         }
         case 'reveal': {
-          if (!step.selector) throw new Error('reveal step requires a selector');
+          if (!step.selector) {
+            throw new Error('reveal step requires a selector');
+          }
           res.value = await reveal(page, step.selector, timeout);
           break;
         }
         case 'press': {
-          if (!step.key) throw new Error('press step requires `key`');
+          if (!step.key) {
+            throw new Error('press step requires `key`');
+          }
           if (step.selector) {
-            await page.locator(step.selector).first().press(step.key, { timeout });
+            await page
+              .locator(step.selector)
+              .first()
+              .press(step.key, { timeout });
           } else {
             await page.keyboard.press(step.key);
           }
@@ -439,6 +245,253 @@ export async function runScript(
     finished: true,
     finalUrl: safeUrl(page),
   };
+}
+
+/**
+ * Runs INSIDE the page. Force-reveals `el` and every ancestor (including
+ * shadow hosts): unhide display/visibility/opacity, drop `hidden` and
+ * `aria-hidden`, then scroll it into view. Returns its post-reveal rect.
+ */
+function revealInPage(el: Element): { revealed: boolean; rect: DOMRect } {
+  let node: Element | null = el;
+  while (node && node !== document.documentElement) {
+    const style = (node as HTMLElement).style;
+    if (style) {
+      const cs = getComputedStyle(node);
+      if (cs.display === 'none') {
+        style.setProperty('display', 'block', 'important');
+      }
+      if (cs.visibility === 'hidden') {
+        style.setProperty('visibility', 'visible', 'important');
+      }
+      if (parseFloat(cs.opacity || '1') === 0) {
+        style.setProperty('opacity', '1', 'important');
+      }
+    }
+    if (node.hasAttribute('hidden')) {
+      node.removeAttribute('hidden');
+    }
+    if (node.getAttribute('aria-hidden') === 'true') {
+      node.removeAttribute('aria-hidden');
+    }
+    // Climb past shadow boundaries too.
+    const parent = node.parentElement;
+    if (parent) {
+      node = parent;
+    } else {
+      const root = node.getRootNode() as ShadowRoot | Document;
+      node = (root as ShadowRoot).host ?? null;
+    }
+  }
+  el.scrollIntoView({ block: 'center', inline: 'center' });
+  return { revealed: true, rect: el.getBoundingClientRect() };
+}
+
+/** Reveal the element a locator points at; best-effort. */
+async function reveal(
+  page: Page,
+  selector: string,
+  timeout: number
+): Promise<unknown> {
+  const handle = await page
+    .locator(selector)
+    .first()
+    .elementHandle({ timeout });
+  if (!handle) {
+    throw new Error(`No element matched "${selector}" to reveal`);
+  }
+  try {
+    return await handle.evaluate(revealInPage);
+  } finally {
+    await handle.dispose().catch(() => {});
+  }
+}
+
+/**
+ * Execute a single actionable step, normal path first then human fallback.
+ * Returns the path that worked. Throws only if both paths fail (or the
+ * caller asked for `never` and normal failed).
+ */
+async function runActionable(
+  page: Page,
+  step: Step,
+  humanize: Humanize,
+  timeout: number
+): Promise<'normal' | 'human' | 'vision'> {
+  const sel = step.selector;
+  if (!sel) {
+    throw new Error(`Step "${step.action}" requires a selector`);
+  }
+  const locator = page.locator(sel).first();
+
+  const normal = async (): Promise<void> => {
+    switch (step.action) {
+      case 'fill':
+        await locator.fill(step.text ?? '', { timeout });
+        break;
+      case 'type':
+        await locator.pressSequentially(step.text ?? '', { timeout });
+        break;
+      case 'click':
+        await locator.click({ timeout });
+        break;
+      case 'hover':
+        await locator.hover({ timeout });
+        break;
+      case 'select':
+        await locator.selectOption(step.value as string | string[], {
+          timeout,
+        });
+        break;
+      case 'scrollTo':
+        await locator.scrollIntoViewIfNeeded({ timeout });
+        break;
+      default:
+        throw new Error(`Not an actionable step: ${step.action}`);
+    }
+  };
+
+  const human = async (): Promise<void> => {
+    // Reveal first, then act slowly. Reveal failures shouldn't mask the
+    // real interaction error, so they're swallowed.
+    await reveal(page, sel, timeout).catch(() => {});
+    await sleep(jitter(120, 320));
+    switch (step.action) {
+      case 'fill':
+      case 'type': {
+        try {
+          await locator.click({ timeout, force: true });
+        } catch {
+          /* focus is best-effort */
+        }
+        await locator.pressSequentially(step.text ?? '', {
+          delay: jitter(40, 90),
+          timeout,
+        });
+        break;
+      }
+      case 'click': {
+        try {
+          await locator.click({ timeout, force: true });
+        } catch {
+          // Last resort: dispatch the click in-page (reaches nodes even
+          // pointer-events / overlays would block).
+          await locator.dispatchEvent('click', undefined, { timeout });
+        }
+        break;
+      }
+      case 'hover':
+        await locator.hover({ timeout, force: true });
+        break;
+      case 'select':
+        await locator.selectOption(step.value as string | string[], {
+          timeout,
+          force: true,
+        });
+        break;
+      case 'scrollTo':
+        await reveal(page, sel, timeout);
+        break;
+      default:
+        throw new Error(`Not an actionable step: ${step.action}`);
+    }
+  };
+
+  if (humanize === 'always') {
+    await human();
+    return 'human';
+  }
+  try {
+    await normal();
+    return 'normal';
+  } catch (err) {
+    if (looksLikeNavigation(err)) {
+      throw err;
+    } // let the caller absorb it
+    if (humanize === 'never') {
+      throw err;
+    }
+    try {
+      await human();
+      return 'human';
+    } catch (humanErr) {
+      if (looksLikeNavigation(humanErr)) {
+        throw humanErr;
+      }
+      // Vision rung: the DOM has nothing for this selector — the element
+      // may only exist as pixels (canvas, WebGL, embedded viewer, image).
+      // If the step names what it LOOKS like, ground that label on screen
+      // and act at the coordinates.
+      const vres = await actViaVision(page, step);
+      if (vres) {
+        return 'vision';
+      }
+      // No visual hint (or nothing matched): rethrow with guidance.
+      const notFound = /waiting for|not found|no element|does not exist/i.test(
+        humanErr instanceof Error ? humanErr.message : String(humanErr)
+      );
+      if (notFound && !step.visual) {
+        throw new Error(
+          `${humanErr instanceof Error ? humanErr.message : String(humanErr)} — ` +
+            `if the control is only rendered as pixels (canvas/WebGL/embedded ` +
+            `viewer/image), add a "visual" hint naming its visible label, e.g. ` +
+            `{"action":"click","selector":"...","visual":"Sign in"}.`
+        );
+      }
+      throw humanErr;
+    }
+  }
+}
+
+/**
+ * Final fallback rung: ground the step's `visual` label on screen (OCR/vision
+ * sidecar) and act at the returned coordinates. Only click / fill / type are
+ * vision-capable — hover/select need richer semantics than a pixel box gives.
+ * Returns the rung's success, or null when it couldn't fire (no hint, no
+ * match, vision disabled) so the caller falls back to rethrowing.
+ */
+async function actViaVision(page: Page, step: Step): Promise<boolean> {
+  if (!step.visual) {
+    return false;
+  }
+  if (
+    step.action !== 'click' &&
+    step.action !== 'fill' &&
+    step.action !== 'type'
+  ) {
+    return false;
+  }
+  const region = await groundLabelOnPage(page, step.visual);
+  if (!region) {
+    return false;
+  }
+  const cx = region.x + Math.floor(region.w / 2);
+  const cy = region.y + Math.floor(region.h / 2);
+  await page.mouse.click(cx, cy);
+  if (step.action === 'fill' || step.action === 'type') {
+    // Focus landed on whatever draws those pixels; type into it.
+    await page.keyboard.type(step.text ?? '', { delay: jitter(40, 90) });
+  }
+  return true;
+}
+
+/** Wait for a page state, a delay, or a navigation. */
+async function runWait(
+  page: Page,
+  step: Step,
+  timeout: number
+): Promise<string> {
+  if (step.waitFor === 'navigation') {
+    await page.waitForLoadState('load', { timeout }).catch(() => {});
+    return 'navigation';
+  }
+  if (step.waitFor) {
+    await page.waitForLoadState(step.waitFor, { timeout });
+    return step.waitFor;
+  }
+  const ms = step.ms ?? 500;
+  await sleep(ms);
+  return `${ms}ms`;
 }
 
 function safeUrl(page: Page): string {

@@ -1,11 +1,9 @@
-import {
-  DOMParser,
-  MIME_TYPE,
-  XMLSerializer,
+import type {
   Document as XMLDocument,
   Node as XMLNode,
   Element as XMLElement,
 } from '@xmldom/xmldom';
+import { DOMParser, MIME_TYPE, XMLSerializer } from '@xmldom/xmldom';
 import _ from 'lodash';
 
 const domParser = new DOMParser();
@@ -15,6 +13,17 @@ export const xmlToDOM = (string: string): XMLDocument =>
   domParser.parseFromString(string, MIME_TYPE.XML_TEXT);
 export const domToXML = (dom: XMLNode): string =>
   xmlSerializer.serializeToString(dom);
+
+interface ElementAttributes {
+  [key: string]: string;
+}
+
+interface JSONElement {
+  children: JSONElement[];
+  tagName: string;
+  attributes: ElementAttributes;
+  path: string;
+}
 
 /**
  * Get the child nodes of a Node object
@@ -52,17 +61,6 @@ export function findDOMNodeByPath(
     selectedElement = childNodesOf(selectedElement)[parseInt(index, 10)];
   }
   return selectedElement;
-}
-
-interface ElementAttributes {
-  [key: string]: string;
-}
-
-interface JSONElement {
-  children: JSONElement[];
-  tagName: string;
-  attributes: ElementAttributes;
-  path: string;
 }
 
 /**

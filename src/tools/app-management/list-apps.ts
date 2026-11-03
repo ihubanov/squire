@@ -1,4 +1,4 @@
-import { FastMCP } from 'fastmcp';
+import type { FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import {
   getDriver,
@@ -15,6 +15,46 @@ import {
 } from '../../ui/mcp-ui-utils.js';
 import type { AndroidUiautomator2Driver } from 'appium-uiautomator2-driver';
 import type { XCUITestDriver } from 'appium-xcuitest-driver';
+
+export default function listApps(server: FastMCP): void {
+  const schema = z.object({});
+
+  server.addTool({
+    name: 'appium_list_apps',
+    description:
+      'List all installed apps on the device. On Android, only package IDs are returned (no display names); on iOS, bundle IDs and display names are returned.',
+    parameters: schema,
+    execute: async () => {
+      try {
+        const apps = await listAppsFromDevice();
+        const textResponse = {
+          content: [
+            {
+              type: 'text',
+              text: `Installed apps: ${JSON.stringify(apps, null, 2)}`,
+            },
+          ],
+        };
+
+        const uiResource = createUIResource(
+          `ui://appium-mcp/app-list/${Date.now()}`,
+          createAppListUI(apps)
+        );
+
+        return addUIResourceToResponse(textResponse, uiResource);
+      } catch (err: any) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Failed to list apps. err: ${err.toString()}`,
+            },
+          ],
+        };
+      }
+    },
+  });
+}
 
 function normalizeListAppsResult(
   result: Record<string, Record<string, unknown> | undefined>
@@ -57,44 +97,4 @@ async function listAppsFromDevice(): Promise<
   }
 
   throw new Error(`listApps is not implemented for platform: ${platform}`);
-}
-
-export default function listApps(server: FastMCP): void {
-  const schema = z.object({});
-
-  server.addTool({
-    name: 'appium_list_apps',
-    description:
-      'List all installed apps on the device. On Android, only package IDs are returned (no display names); on iOS, bundle IDs and display names are returned.',
-    parameters: schema,
-    execute: async () => {
-      try {
-        const apps = await listAppsFromDevice();
-        const textResponse = {
-          content: [
-            {
-              type: 'text',
-              text: `Installed apps: ${JSON.stringify(apps, null, 2)}`,
-            },
-          ],
-        };
-
-        const uiResource = createUIResource(
-          `ui://appium-mcp/app-list/${Date.now()}`,
-          createAppListUI(apps)
-        );
-
-        return addUIResourceToResponse(textResponse, uiResource);
-      } catch (err: any) {
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Failed to list apps. err: ${err.toString()}`,
-            },
-          ],
-        };
-      }
-    },
-  });
 }

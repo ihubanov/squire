@@ -49,7 +49,7 @@ registerTools(server);
 // clean up on disconnect for stdio. Override with
 // APPIUM_MCP_CLEANUP_ON_DISCONNECT=true|false.
 const isHttpStream = process.argv.includes('--httpStream');
-const cleanupEnv = process.env['APPIUM_MCP_CLEANUP_ON_DISCONNECT'];
+const cleanupEnv = process.env.APPIUM_MCP_CLEANUP_ON_DISCONNECT;
 const cleanupOnDisconnect =
   cleanupEnv != null
     ? !['false', '0', 'no'].includes(cleanupEnv.trim().toLowerCase())
@@ -111,7 +111,9 @@ server.on('disconnect', async (event) => {
 // sessions get torn down automatically.
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
-  if (shuttingDown) return;
+  if (shuttingDown) {
+    return;
+  }
   shuttingDown = true;
   log.info(`Received ${signal}, cleaning up active sessions before exit...`);
   try {
@@ -136,19 +138,25 @@ process.on('SIGINT', () => void shutdown('SIGINT'));
 // Claude session ends, without waiting for the next tick. A session another
 // client is still driving keeps a fresh activity clock and is never reaped.
 function idleReapMs(): number {
-  const raw = process.env['APPIUM_MCP_IDLE_REAP_MS'];
-  if (raw == null || raw.trim() === '') return 5 * 60 * 1000;
+  const raw = process.env.APPIUM_MCP_IDLE_REAP_MS;
+  if (raw == null || raw.trim() === '') {
+    return 5 * 60 * 1000;
+  }
   const n = Number(raw.trim());
   return Number.isFinite(n) && n >= 0 ? n : 5 * 60 * 1000;
 }
 
 async function reapNow(trigger: string): Promise<void> {
   const idleMs = idleReapMs();
-  if (idleMs === 0) return; // disabled
+  if (idleMs === 0) {
+    return;
+  } // disabled
   try {
     const { reaped, ids } = await reapIdleSessions(idleMs);
     if (reaped > 0) {
-      log.info(`Idle reaper (${trigger}) closed ${reaped} session(s): ${ids.join(', ')}`);
+      log.info(
+        `Idle reaper (${trigger}) closed ${reaped} session(s): ${ids.join(', ')}`
+      );
     }
   } catch (error) {
     log.error(`Idle reaper (${trigger}) error:`, error);
@@ -159,7 +167,10 @@ if (idleReapMs() > 0) {
   // Sweep on a timer as the autonomous backstop. Interval is a quarter of the
   // idle window, clamped to [30s, 5m], so a stale browser is caught promptly
   // without busy-looping.
-  const tick = Math.min(5 * 60 * 1000, Math.max(30 * 1000, Math.floor(idleReapMs() / 4)));
+  const tick = Math.min(
+    5 * 60 * 1000,
+    Math.max(30 * 1000, Math.floor(idleReapMs() / 4))
+  );
   const timer = setInterval(() => void reapNow('timer'), tick);
   timer.unref?.(); // never keep the process alive just for the reaper
 }

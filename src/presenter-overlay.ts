@@ -27,7 +27,9 @@ export function installPresenter(cfg?: {
   const w = window as any;
   const existing = w.__squirePresenter;
   if (existing && existing.host && existing.host.isConnected) {
-    if (cfg && cfg.accent) existing.setAccent(cfg.accent);
+    if (cfg && cfg.accent) {
+      existing.setAccent(cfg.accent);
+    }
     return false;
   }
 
@@ -135,7 +137,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 
   const el = (tag: string, cls?: string): HTMLElement => {
     const e = document.createElement(tag);
-    if (cls) e.className = cls;
+    if (cls) {
+      e.className = cls;
+    }
     return e;
   };
   const svg = (paths: string[], viewBox: string): SVGSVGElement => {
@@ -250,7 +254,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   const emit = (type: string) => {
     api.seq += 1;
     api.events.push({ seq: api.seq, type, at: Date.now() });
-    if (api.events.length > 50) api.events.splice(0, api.events.length - 50);
+    if (api.events.length > 50) {
+      api.events.splice(0, api.events.length - 50);
+    }
   };
 
   const clamp = (v: number, lo: number, hi: number) =>
@@ -266,7 +272,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     }
     if (state.el && state.el.isConnected) {
       const r = state.el.getBoundingClientRect();
-      if (r.width === 0 && r.height === 0) return null;
+      if (r.width === 0 && r.height === 0) {
+        return null;
+      }
       return { x: r.left, y: r.top, w: r.width, h: r.height };
     }
     return state.rect;
@@ -371,7 +379,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   };
 
   const frame = () => {
-    if (!state.active) return;
+    if (!state.active) {
+      return;
+    }
     const r = currentRect();
     const key = r
       ? `${Math.round(r.x)},${Math.round(r.y)},${Math.round(r.w)},${Math.round(r.h)}`
@@ -387,8 +397,12 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   let pending = false;
   const inTarget = (t: EventTarget | null, ev?: MouseEvent): boolean => {
     // The spotlight still shows the previous step's element until setTarget.
-    if (pending) return false;
-    if (t instanceof Node && host.contains(t)) return false;
+    if (pending) {
+      return false;
+    }
+    if (t instanceof Node && host.contains(t)) {
+      return false;
+    }
     if (state.el && state.el.isConnected && t instanceof Node) {
       return state.el.contains(t);
     }
@@ -406,8 +420,12 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   // Whether the person has clicked or edited the target since the step was
   // shown — so a Next press doesn't repeat what they already did.
   const onClick = (e: MouseEvent) => {
-    if (!state.active) return;
-    if (inTarget(e.target, e)) api.touched = true;
+    if (!state.active) {
+      return;
+    }
+    if (inTarget(e.target, e)) {
+      api.touched = true;
+    }
     if (
       (state.advance === 'click' || state.advance === 'navigation') &&
       inTarget(e.target, e)
@@ -416,10 +434,14 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     }
   };
   const onInput = (e: Event) => {
-    if (state.active && inTarget(e.target)) api.touched = true;
+    if (state.active && inTarget(e.target)) {
+      api.touched = true;
+    }
   };
   const onChange = (e: Event) => {
-    if (state.active && inTarget(e.target)) api.touched = true;
+    if (state.active && inTarget(e.target)) {
+      api.touched = true;
+    }
     if (state.active && state.advance === 'input' && inTarget(e.target)) {
       emit('target-input');
     }
@@ -450,9 +472,13 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   };
 
   api.setAccent = (c: string) => {
-    if (c) wrap.style.setProperty('--acc', c);
+    if (c) {
+      wrap.style.setProperty('--acc', c);
+    }
   };
-  if (cfg && cfg.accent) api.setAccent(cfg.accent);
+  if (cfg && cfg.accent) {
+    api.setAccent(cfg.accent);
+  }
 
   const reveal = () => {
     if (state.el && state.el.isConnected) {
@@ -536,7 +562,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     bubble.classList.add('pop', 'on');
     spot.classList.add('on');
 
-    if (!o.pending) reveal();
+    if (!o.pending) {
+      reveal();
+    }
     cancelAnimationFrame(state.raf);
     state.raf = requestAnimationFrame(frame);
     if (o.mode !== 'demo') {
@@ -553,8 +581,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   api.hide = () => {
     state.active = false;
     cancelAnimationFrame(state.raf);
-    for (const n of [spot, ring, arrow, bubble, cursor])
+    for (const n of [spot, ring, arrow, bubble, cursor]) {
       n.classList.remove('on');
+    }
     return true;
   };
 
@@ -596,7 +625,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     document.removeEventListener('input', onInput, true);
     document.removeEventListener('keydown', onKey, true);
     host.remove();
-    if (w.__squirePresenter === api) delete w.__squirePresenter;
+    if (w.__squirePresenter === api) {
+      delete w.__squirePresenter;
+    }
     return true;
   };
 

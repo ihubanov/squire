@@ -33,131 +33,28 @@ export interface GroundedRegion {
 let sidecar: ChildProcess | null = null;
 let sidecarDead = false;
 
-function visionEnabled(): boolean {
-  const v = process.env['APPIUM_MCP_VISION'];
-  return !(v != null && ['0', 'false', 'no'].includes(v.trim().toLowerCase()));
-}
-
-function sidecarScript(): string {
-  const explicit = process.env['APPIUM_MCP_VISION_SIDECAR'];
-  if (explicit) return explicit;
-  // Works for both src/ (tests, dev) and dist/ (built) since each is one
-  // level below the repo root, where scripts/ lives.
-  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'vision-grounding.py');
-}
-
-function sidecarPython(): string {
-  // onnxruntime has no wheels for every Python (3.14 notably), so when an
-  // ONNX detector is configured the sidecar usually needs to run inside a
-  // venv — point APPIUM_MCP_VISION_PYTHON at that interpreter.
-  return process.env['APPIUM_MCP_VISION_PYTHON'] ?? 'python3';
-}
-
-function ensureSidecar(): ChildProcess {
-  if (sidecar && !sidecarDead) return sidecar;
-  const proc = spawn(sidecarPython(), [sidecarScript()], { stdio: ['pipe', 'pipe', 'pipe'] });
-  proc.on('error', (err) => {
-    // ENOENT on the interpreter, etc. — without this the pending request
-    // would only fail via the timeout, hiding the real cause.
-    sidecarDead = true;
-    console.error(`[vision-grounding] failed to spawn ${sidecarPython()}: ${err.message}`);
-  });
-  sidecarDead = false;
-  proc.on('exit', () => {
-    sidecarDead = true;
-    sidecar = null;
-  });
-  proc.stderr?.on('data', (d: Buffer) => {
-    // Surface sidecar stderr but never crash the server for it.
-    // eslint-disable-next-line no-console
-    console.error(`[vision-grounding] ${d.toString().trimEnd()}`);
-  });
-  // A spawned child is an ACTIVE handle: without unref, a one-shot process
-  // (script, test) that grounds once would hang forever waiting for the
-  // sidecar to exit — while the sidecar waits for stdin lines. Deadlock.
-  // Unref lets the parent exit independently; the exit handler below then
-  // kills the sidecar (and the sidecar also self-exits after idle as a
-  // belt-and-suspenders backstop).
-  proc.unref();
-  // stdio streams are sockets at runtime; their static type just doesn't
-  // declare unref.
-  (proc.stdin as unknown as { unref?: () => void } | null)?.unref?.();
-  (proc.stdout as unknown as { unref?: () => void } | null)?.unref?.();
-  (proc.stderr as unknown as { unref?: () => void } | null)?.unref?.();
-  // Never leave a spawned python behind when the host process exits.
-  process.on('exit', () => { try { proc.kill(); } catch { /* already gone */ } });
-  sidecar = proc;
-  return proc;
-}
-
 interface SidecarResponse {
   ok: boolean;
   reason?: string;
-  match?: { x: number; y: number; w: number; h: number; text: string; backend: string };
+  match?: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    text: string;
+    backend: string;
+  };
   backends?: string[];
 }
-
-/**
- * One JSON-lines request/response round-trip with the sidecar. A request id
- * prefix lets us ignore lines that aren't ours (there are none today, but the
- * guard is cheap).
- */
-function sidecarRequest(request: Record<string, unknown>, timeoutMs: number): Promise<SidecarResponse> {
-  return new Promise((resolve, reject) => {
-    let proc: ChildProcess;
-    try {
-      proc = ensureSidecar();
-    } catch (err) {
-      reject(err);
-      return;
-    }
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error(`vision sidecar timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    let buf = '';
-    const onStdout = (d: Buffer) => {
-      buf += d.toString();
-      const nl = buf.indexOf('\n');
-      if (nl === -1) return;
-      const line = buf.slice(0, nl).trim();
-      cleanup();
-      if (!line) {
-        reject(new Error('vision sidecar returned an empty line'));
-        return;
-      }
-      try {
-        resolve(JSON.parse(line) as SidecarResponse);
-      } catch {
-        reject(new Error(`vision sidecar returned non-JSON: ${line.slice(0, 200)}`));
-      }
-    };
-    const onExit = (code: number | null) => {
-      cleanup();
-      reject(new Error(`vision sidecar exited (code ${code}) before answering`));
-    };
-
-    function cleanup(): void {
-      clearTimeout(timer);
-      proc.stdout?.off('data', onStdout);
-      proc.off('exit', onExit);
-    }
-
-    proc.stdout?.on('data', onStdout);
-    proc.once('exit', onExit);
-    proc.stdin?.write(JSON.stringify(request) + '\n');
-  });
-}
-
-// ── page-level API ─────────────────────────────────────────────────────────
 
 /**
  * Report which grounding backends are available, without making a request.
  * Used to explain (in errors) why a visual fallback did not fire.
  */
 export async function visionBackends(): Promise<string[]> {
-  if (!visionEnabled()) return [];
+  if (!visionEnabled()) {
+    return [];
+  }
   try {
     const resp = await sidecarRequest({ op: 'ping' }, 5000);
     return resp.ok ? (resp.backends ?? []) : [];
@@ -178,9 +75,11 @@ export async function visionBackends(): Promise<string[]> {
 export async function groundLabelOnPage(
   page: Page,
   target: string,
-  timeoutMs = 10_000,
+  timeoutMs = 10_000
 ): Promise<GroundedRegion | null> {
-  if (!visionEnabled() || !target.trim()) return null;
+  if (!visionEnabled() || !target.trim()) {
+    return null;
+  }
 
   const viewport = page.viewportSize();
   let screenshot: Buffer;
@@ -206,10 +105,12 @@ export async function groundLabelOnPage(
         width: imgW,
         height: imgH,
       },
-      timeoutMs,
+      timeoutMs
     );
     if (!resp.ok || !resp.match) {
-      console.error(`[vision-grounding] no match for ${JSON.stringify(target)}: ${resp.reason ?? 'no match in response'}`);
+      console.error(
+        `[vision-grounding] no match for ${JSON.stringify(target)}: ${resp.reason ?? 'no match in response'}`
+      );
       return null;
     }
     const m = resp.match;
@@ -226,6 +127,146 @@ export async function groundLabelOnPage(
     console.error(`[vision-grounding] sidecar request failed: ${errMsg(err)}`);
     return null;
   }
+}
+
+function visionEnabled(): boolean {
+  const v = process.env.APPIUM_MCP_VISION;
+  return !(v != null && ['0', 'false', 'no'].includes(v.trim().toLowerCase()));
+}
+
+function sidecarScript(): string {
+  const explicit = process.env.APPIUM_MCP_VISION_SIDECAR;
+  if (explicit) {
+    return explicit;
+  }
+  // Works for both src/ (tests, dev) and dist/ (built) since each is one
+  // level below the repo root, where scripts/ lives.
+  return path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'scripts',
+    'vision-grounding.py'
+  );
+}
+
+function sidecarPython(): string {
+  // onnxruntime has no wheels for every Python (3.14 notably), so when an
+  // ONNX detector is configured the sidecar usually needs to run inside a
+  // venv — point APPIUM_MCP_VISION_PYTHON at that interpreter.
+  return process.env.APPIUM_MCP_VISION_PYTHON ?? 'python3';
+}
+
+// ── page-level API ─────────────────────────────────────────────────────────
+
+function ensureSidecar(): ChildProcess {
+  if (sidecar && !sidecarDead) {
+    return sidecar;
+  }
+  const proc = spawn(sidecarPython(), [sidecarScript()], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  proc.on('error', (err) => {
+    // ENOENT on the interpreter, etc. — without this the pending request
+    // would only fail via the timeout, hiding the real cause.
+    sidecarDead = true;
+    console.error(
+      `[vision-grounding] failed to spawn ${sidecarPython()}: ${err.message}`
+    );
+  });
+  sidecarDead = false;
+  proc.on('exit', () => {
+    sidecarDead = true;
+    sidecar = null;
+  });
+  proc.stderr?.on('data', (d: Buffer) => {
+    // Surface sidecar stderr but never crash the server for it.
+
+    console.error(`[vision-grounding] ${d.toString().trimEnd()}`);
+  });
+  // A spawned child is an ACTIVE handle: without unref, a one-shot process
+  // (script, test) that grounds once would hang forever waiting for the
+  // sidecar to exit — while the sidecar waits for stdin lines. Deadlock.
+  // Unref lets the parent exit independently; the exit handler below then
+  // kills the sidecar (and the sidecar also self-exits after idle as a
+  // belt-and-suspenders backstop).
+  proc.unref();
+  // stdio streams are sockets at runtime; their static type just doesn't
+  // declare unref.
+  (proc.stdin as unknown as { unref?: () => void } | null)?.unref?.();
+  (proc.stdout as unknown as { unref?: () => void } | null)?.unref?.();
+  (proc.stderr as unknown as { unref?: () => void } | null)?.unref?.();
+  // Never leave a spawned python behind when the host process exits.
+  process.on('exit', () => {
+    try {
+      proc.kill();
+    } catch {
+      /* already gone */
+    }
+  });
+  sidecar = proc;
+  return proc;
+}
+
+/**
+ * One JSON-lines request/response round-trip with the sidecar. A request id
+ * prefix lets us ignore lines that aren't ours (there are none today, but the
+ * guard is cheap).
+ */
+function sidecarRequest(
+  request: Record<string, unknown>,
+  timeoutMs: number
+): Promise<SidecarResponse> {
+  return new Promise((resolve, reject) => {
+    let proc: ChildProcess;
+    try {
+      proc = ensureSidecar();
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`vision sidecar timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    let buf = '';
+    const onStdout = (d: Buffer) => {
+      buf += d.toString();
+      const nl = buf.indexOf('\n');
+      if (nl === -1) {
+        return;
+      }
+      const line = buf.slice(0, nl).trim();
+      cleanup();
+      if (!line) {
+        reject(new Error('vision sidecar returned an empty line'));
+        return;
+      }
+      try {
+        resolve(JSON.parse(line) as SidecarResponse);
+      } catch {
+        reject(
+          new Error(`vision sidecar returned non-JSON: ${line.slice(0, 200)}`)
+        );
+      }
+    };
+    const onExit = (code: number | null) => {
+      cleanup();
+      reject(
+        new Error(`vision sidecar exited (code ${code}) before answering`)
+      );
+    };
+
+    function cleanup(): void {
+      clearTimeout(timer);
+      proc.stdout?.off('data', onStdout);
+      proc.off('exit', onExit);
+    }
+
+    proc.stdout?.on('data', onStdout);
+    proc.once('exit', onExit);
+    proc.stdin?.write(JSON.stringify(request) + '\n');
+  });
 }
 
 function errMsg(err: unknown): string {

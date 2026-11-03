@@ -76,12 +76,16 @@ describe('appium_get_page_source on a web session', () => {
     uiResourceAttached = false;
   });
   afterEach(() => {
-    prev === undefined
-      ? delete process.env.APPIUM_MCP_UI
-      : (process.env.APPIUM_MCP_UI = prev);
-    prevMax === undefined
-      ? delete process.env.APPIUM_MCP_PAGE_SOURCE_MAX
-      : (process.env.APPIUM_MCP_PAGE_SOURCE_MAX = prevMax);
+    if (prev === undefined) {
+      delete process.env.APPIUM_MCP_UI;
+    } else {
+      process.env.APPIUM_MCP_UI = prev;
+    }
+    if (prevMax === undefined) {
+      delete process.env.APPIUM_MCP_PAGE_SOURCE_MAX;
+    } else {
+      process.env.APPIUM_MCP_PAGE_SOURCE_MAX = prevMax;
+    }
   });
 
   test('labels HTML, caps the preview, saves full source, no UI by default', async () => {

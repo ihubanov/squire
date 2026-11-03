@@ -12,7 +12,14 @@
  * a sentinel that throws — proving the fallback path was ENTERED without
  * spawning a real browser.
  */
-import { describe, test, expect, jest, beforeEach, afterEach } from '@jest/globals';
+import {
+  describe,
+  test,
+  expect,
+  jest,
+  beforeEach,
+  afterEach,
+} from '@jest/globals';
 
 const connectOverCDP = jest.fn(async () => {
   throw new Error('ECONNREFUSED (simulated dead gate)');
@@ -102,12 +109,12 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
   beforeEach(() => {
     connectOverCDP.mockClear();
     launch.mockClear();
-    process.env['APPIUM_MCP_CDP_ENDPOINT'] = 'http://127.0.0.1:9401';
-    process.env['APPIUM_MCP_CDP_REQUIRED'] = '1';
+    process.env.APPIUM_MCP_CDP_ENDPOINT = 'http://127.0.0.1:9401';
+    process.env.APPIUM_MCP_CDP_REQUIRED = '1';
   });
   afterEach(() => {
-    delete process.env['APPIUM_MCP_CDP_ENDPOINT'];
-    delete process.env['APPIUM_MCP_CDP_REQUIRED'];
+    delete process.env.APPIUM_MCP_CDP_ENDPOINT;
+    delete process.env.APPIUM_MCP_CDP_REQUIRED;
   });
 
   test('failed attach THROWS (no detached fallback) when required', async () => {
@@ -121,7 +128,7 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
   });
 
   test('required flag without an endpoint is a loud config error', async () => {
-    delete process.env['APPIUM_MCP_CDP_ENDPOINT'];
+    delete process.env.APPIUM_MCP_CDP_ENDPOINT;
     await expect(
       cfg.execute({ platform: 'web', browser: 'chromium', headless: true }, {})
     ).rejects.toThrow(/APPIUM_MCP_CDP_ENDPOINT is not/);
@@ -136,7 +143,7 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
   });
 
   test('without the flag, attach failure still falls back to a launch attempt', async () => {
-    delete process.env['APPIUM_MCP_CDP_REQUIRED'];
+    delete process.env.APPIUM_MCP_CDP_REQUIRED;
     // The detached-launch path is ENTERED: launch is attempted (and hit
     // by our sentinel) rather than the CDP error surfacing.
     await expect(
@@ -149,7 +156,7 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
   });
 
   test('flag is off for explicit falsy values', async () => {
-    process.env['APPIUM_MCP_CDP_REQUIRED'] = 'false';
+    process.env.APPIUM_MCP_CDP_REQUIRED = 'false';
     await expect(
       cfg.execute({ platform: 'web', browser: 'chromium', headless: true }, {})
     ).rejects.toThrow(/launch sentinel/);

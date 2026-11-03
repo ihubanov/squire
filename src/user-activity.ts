@@ -34,21 +34,11 @@ let lastActionEnd = 0;
 const watched = new WeakSet<BrowserContext>();
 const waiters = new Set<() => void>();
 
-function isSquires(at: number): boolean {
-  return acting > 0 || at - lastActionEnd < SETTLE_MS;
-}
-
-function record(e: UserEvent): void {
-  if (isSquires(e.at)) return;
-  events.push(e);
-  if (events.length > MAX_EVENTS) events.splice(0, events.length - MAX_EVENTS);
-  for (const w of waiters) w();
-}
-
 /** Bracket a tool's run so its own clicks and loads are not reported as the user's. */
 export function beginAction(): void {
   acting++;
 }
+
 export function endAction(): void {
   acting = Math.max(0, acting - 1);
   lastActionEnd = Date.now();
@@ -58,10 +48,11 @@ export function endAction(): void {
 export function takeUserEvents(): UserEvent[] {
   return events.splice(0, events.length);
 }
-
 /** Wait up to `ms` for the user to do something; resolves early on the first event. */
 export function waitForUserEvent(ms: number): Promise<void> {
-  if (events.length) return Promise.resolve();
+  if (events.length) {
+    return Promise.resolve();
+  }
   return new Promise((resolve) => {
     const done = () => {
       clearTimeout(timer);
@@ -73,6 +64,36 @@ export function waitForUserEvent(ms: number): Promise<void> {
   });
 }
 
+export function formatUserEvents(list: UserEvent[]): string {
+  if (!list.length) {
+    return '';
+  }
+  const lines = list.slice(-20).map((e) => {
+    const t = new Date(e.at).toTimeString().slice(0, 8);
+    return `- ${t} ${e.kind} ${e.detail} (${host(e.tab)})`;
+  });
+  const more =
+    list.length > 20 ? `\n(${list.length - 20} earlier events left out)` : '';
+  return `The user did this in their browser since your last action:\n${lines.join('\n')}${more}`;
+}
+
+function isSquires(at: number): boolean {
+  return acting > 0 || at - lastActionEnd < SETTLE_MS;
+}
+
+function record(e: UserEvent): void {
+  if (isSquires(e.at)) {
+    return;
+  }
+  events.push(e);
+  if (events.length > MAX_EVENTS) {
+    events.splice(0, events.length - MAX_EVENTS);
+  }
+  for (const w of waiters) {
+    w();
+  }
+}
+
 function host(url: string): string {
   try {
     const u = new URL(url);
@@ -80,16 +101,6 @@ function host(url: string): string {
   } catch {
     return url;
   }
-}
-
-export function formatUserEvents(list: UserEvent[]): string {
-  if (!list.length) return '';
-  const lines = list.slice(-20).map((e) => {
-    const t = new Date(e.at).toTimeString().slice(0, 8);
-    return `- ${t} ${e.kind} ${e.detail} (${host(e.tab)})`;
-  });
-  const more = list.length > 20 ? `\n(${list.length - 20} earlier events left out)` : '';
-  return `The user did this in their browser since your last action:\n${lines.join('\n')}${more}`;
 }
 
 /** Runs in the page. Reports trusted user events as tagged console.debug messages. */
@@ -128,6 +139,27 @@ const WATCH_SCRIPT = `(() => {
   document.addEventListener('submit', (e) => { report('submitted form', name(e.target)); }, true);
 })();`;
 
+/**
+ * Start reporting what the user does in `context` (the user's own browser).
+ * Safe to call more than once. Frozen tabs are skipped, not waited on.
+ */
+export async function watchUserActivity(
+  context: BrowserContext
+): Promise<void> {
+  if (watched.has(context)) {
+    return;
+  }
+  watched.add(context);
+  await within(context.addInitScript(WATCH_SCRIPT), 5000);
+  for (const p of context.pages()) {
+    watchPage(p);
+  }
+  context.on('page', (p) => {
+    record({ at: Date.now(), kind: 'opened a tab', tab: p.url(), detail: '' });
+    watchPage(p);
+  });
+}
+
 function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
   return Promise.race([
     p.catch(() => undefined),
@@ -137,36 +169,35 @@ function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
 
 function watchPage(page: Page): void {
   page.on('console', (msg) => {
-    if (msg.type() !== 'debug') return;
+    if (msg.type() !== 'debug') {
+      return;
+    }
     const text = msg.text();
-    if (!text.startsWith(TAG)) return;
+    if (!text.startsWith(TAG)) {
+      return;
+    }
     try {
-      const { kind, detail } = JSON.parse(text.slice(TAG.length)) as { kind: string; detail: string };
+      const { kind, detail } = JSON.parse(text.slice(TAG.length)) as {
+        kind: string;
+        detail: string;
+      };
       record({ at: Date.now(), kind, detail, tab: page.url() });
     } catch {
       /* malformed report */
     }
   });
   page.on('framenavigated', (frame) => {
-    if (frame !== page.mainFrame()) return;
-    record({ at: Date.now(), kind: 'loaded', tab: frame.url(), detail: 'a page' });
+    if (frame !== page.mainFrame()) {
+      return;
+    }
+    record({
+      at: Date.now(),
+      kind: 'loaded',
+      tab: frame.url(),
+      detail: 'a page',
+    });
   });
   // Tabs that already have a document need the listener now; new
   // documents get it from the init script.
   void within(page.evaluate(WATCH_SCRIPT), 2000);
-}
-
-/**
- * Start reporting what the user does in `context` (the user's own browser).
- * Safe to call more than once. Frozen tabs are skipped, not waited on.
- */
-export async function watchUserActivity(context: BrowserContext): Promise<void> {
-  if (watched.has(context)) return;
-  watched.add(context);
-  await within(context.addInitScript(WATCH_SCRIPT), 5000);
-  for (const p of context.pages()) watchPage(p);
-  context.on('page', (p) => {
-    record({ at: Date.now(), kind: 'opened a tab', tab: p.url(), detail: '' });
-    watchPage(p);
-  });
 }

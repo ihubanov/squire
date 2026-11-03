@@ -52,7 +52,9 @@ export async function countProfiles(browser: Browser): Promise<number> {
 }
 
 /** "profile A", "profile B", … in order of first appearance. */
-export function profileLabels(ids: (string | undefined)[]): Map<string, string> {
+export function profileLabels(
+  ids: (string | undefined)[]
+): Map<string, string> {
   const labels = new Map<string, string>();
   for (const id of ids) {
     if (id && !labels.has(id)) {
@@ -73,7 +75,9 @@ export async function openTabInProfileOf(
   timeoutMs = 15_000
 ): Promise<Page> {
   const popup = opener.waitForEvent('popup', { timeout: timeoutMs });
-  popup.catch(() => { /* surfaced through the await below */ });
+  popup.catch(() => {
+    /* surfaced through the await below */
+  });
   const s = await context.newCDPSession(opener);
   try {
     const res = (await s.send('Runtime.evaluate', {
@@ -88,6 +92,10 @@ export async function openTabInProfileOf(
     await s.detach().catch(() => {});
   }
   const page = await popup;
-  await page.evaluate(() => { window.opener = null; }).catch(() => {});
+  await page
+    .evaluate(() => {
+      window.opener = null;
+    })
+    .catch(() => {});
   return page;
 }

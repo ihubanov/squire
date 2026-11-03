@@ -5,7 +5,14 @@
  *  - Two tabs can be driven CONCURRENTLY by id without clobbering each other or
  *    the active-page pointer — the primitive that lets one agent-per-tab work.
  */
-import { describe, test, expect, beforeAll, afterAll, jest } from '@jest/globals';
+import {
+  describe,
+  test,
+  expect,
+  beforeAll,
+  afterAll,
+  jest,
+} from '@jest/globals';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
@@ -76,12 +83,16 @@ describe('stable tab ids', () => {
       // Drive both tabs at the same time, each resolved by its own id — exactly
       // what two per-tab agents would do through playwright_run_script({tab}).
       const [resA, resB] = await Promise.all([
-        runScript(driver.resolvePage(idA)!, [
-          { action: 'fill', selector: '#v', text: 'A' },
-        ], { stepTimeout: 4000 }),
-        runScript(driver.resolvePage(idB)!, [
-          { action: 'fill', selector: '#v', text: 'B' },
-        ], { stepTimeout: 4000 }),
+        runScript(
+          driver.resolvePage(idA)!,
+          [{ action: 'fill', selector: '#v', text: 'A' }],
+          { stepTimeout: 4000 }
+        ),
+        runScript(
+          driver.resolvePage(idB)!,
+          [{ action: 'fill', selector: '#v', text: 'B' }],
+          { stepTimeout: 4000 }
+        ),
       ]);
 
       expect(resA.finished).toBe(true);

@@ -67,8 +67,11 @@ describe('executeScreenshot returns a real MCP image block', () => {
     delete process.env.APPIUM_MCP_UI;
   });
   afterEach(() => {
-    if (prev === undefined) delete process.env.APPIUM_MCP_UI;
-    else process.env.APPIUM_MCP_UI = prev;
+    if (prev === undefined) {
+      delete process.env.APPIUM_MCP_UI;
+    } else {
+      process.env.APPIUM_MCP_UI = prev;
+    }
   });
 
   test('default: text path + full-res image block, no UI resource', async () => {

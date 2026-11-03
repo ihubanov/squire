@@ -10,7 +10,7 @@
 import { writeFileSync } from 'node:fs';
 
 const STATE_PATH =
-  process.env['AI_COLLEAGUE_AI_STATE_FILE'] ?? '/tmp/ai-colleague-ai-state.json';
+  process.env.AI_COLLEAGUE_AI_STATE_FILE ?? '/tmp/ai-colleague-ai-state.json';
 
 export function writeAiActiveTab(index: number, url: string): void {
   try {
@@ -21,7 +21,7 @@ export function writeAiActiveTab(index: number, url: string): void {
         aiActiveTabUrl: url,
         updatedAt: new Date().toISOString(),
       }),
-      'utf8',
+      'utf8'
     );
   } catch {
     // Silent — this is advisory state.

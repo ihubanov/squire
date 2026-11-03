@@ -14,7 +14,9 @@ import { join } from 'node:path';
 /** Profile directories Chrome/Chromium write DevToolsActivePort into. */
 export function profileDirs(): string[] {
   const override = process.env.APPIUM_MCP_CHROME_PROFILE_DIR;
-  if (override) return [override];
+  if (override) {
+    return [override];
+  }
   const home = homedir();
   const linux = [
     'google-chrome',
@@ -28,23 +30,16 @@ export function profileDirs(): string[] {
   return [...linux, ...mac];
 }
 
-async function hasDiscovery(endpoint: string): Promise<boolean> {
-  try {
-    const res = await fetch(new URL('/json/version', endpoint), {
-      signal: AbortSignal.timeout(2000),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
 export async function resolveCdpEndpoint(
   endpoint: string,
   dirs: string[] = profileDirs()
 ): Promise<string> {
-  if (/^wss?:\/\//i.test(endpoint)) return endpoint;
-  if (await hasDiscovery(endpoint)) return endpoint;
+  if (/^wss?:\/\//i.test(endpoint)) {
+    return endpoint;
+  }
+  if (await hasDiscovery(endpoint)) {
+    return endpoint;
+  }
 
   const url = new URL(endpoint);
   const port = url.port || (url.protocol === 'https:' ? '443' : '80');
@@ -65,16 +60,33 @@ export async function resolveCdpEndpoint(
 
 /** The browser's WebSocket URL for an endpoint from resolveCdpEndpoint. */
 export async function toBrowserWebSocketUrl(endpoint: string): Promise<string> {
-  if (/^wss?:\/\//i.test(endpoint)) return endpoint;
+  if (/^wss?:\/\//i.test(endpoint)) {
+    return endpoint;
+  }
   const res = await fetch(new URL('/json/version', endpoint), {
     signal: AbortSignal.timeout(5000),
   });
-  const { webSocketDebuggerUrl } = (await res.json()) as { webSocketDebuggerUrl?: string };
-  if (!webSocketDebuggerUrl) throw new Error(`${endpoint} gave no webSocketDebuggerUrl`);
+  const { webSocketDebuggerUrl } = (await res.json()) as {
+    webSocketDebuggerUrl?: string;
+  };
+  if (!webSocketDebuggerUrl) {
+    throw new Error(`${endpoint} gave no webSocketDebuggerUrl`);
+  }
   // Chrome reports its own idea of the host; keep the one we were given.
   const ws = new URL(webSocketDebuggerUrl);
   ws.host = new URL(endpoint).host;
   return ws.toString();
+}
+
+async function hasDiscovery(endpoint: string): Promise<boolean> {
+  try {
+    const res = await fetch(new URL('/json/version', endpoint), {
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 /** Prefix for an attach that got past Allow but failed afterwards. */
@@ -91,7 +103,9 @@ export function explainAttachError(
   timeoutMs: number
 ): string {
   const msg = err.message;
-  if (msg.startsWith(ACCEPTED_PREFIX)) return msg.split('\n')[0];
+  if (msg.startsWith(ACCEPTED_PREFIX)) {
+    return msg.split('\n')[0];
+  }
   if (/ECONNREFUSED/.test(msg)) {
     if (resolved !== endpoint) {
       return `Chrome's remote debugging is off (DevToolsActivePort is left over from when it was on). Turn on "Allow remote debugging" at chrome://inspect/#remote-debugging.`;
@@ -112,7 +126,9 @@ export async function profileDirForPort(
   for (const dir of dirs) {
     try {
       const text = await readFile(join(dir, 'DevToolsActivePort'), 'utf8');
-      if (text.trim().split('\n')[0]?.trim() === port) return dir;
+      if (text.trim().split('\n')[0]?.trim() === port) {
+        return dir;
+      }
     } catch {
       /* not this one */
     }

@@ -9,8 +9,7 @@
 import { appendFileSync } from 'node:fs';
 
 const LOG_PATH =
-  process.env['AI_COLLEAGUE_ACTIVITY_LOG'] ??
-  '/tmp/ai-colleague-activity.jsonl';
+  process.env.AI_COLLEAGUE_ACTIVITY_LOG ?? '/tmp/ai-colleague-activity.jsonl';
 
 export type ActivityStatus = 'ok' | 'error' | 'blocked';
 
@@ -24,7 +23,7 @@ export interface ActivityRecord {
   error?: string;
 }
 
-const SOURCE = process.env['AI_COLLEAGUE_ACTIVITY_SOURCE'] ?? 'appium-mcp';
+const SOURCE = process.env.AI_COLLEAGUE_ACTIVITY_SOURCE ?? 'appium-mcp';
 
 export function logActivity(args: {
   tool: string;
@@ -39,7 +38,9 @@ export function logActivity(args: {
     tool: args.tool,
     status: args.status ?? 'ok',
     ...(args.tab !== undefined ? { tab: args.tab } : {}),
-    ...(args.detail !== undefined ? { detail: truncate(args.detail, 200) } : {}),
+    ...(args.detail !== undefined
+      ? { detail: truncate(args.detail, 200) }
+      : {}),
     ...(args.error !== undefined ? { error: truncate(args.error, 300) } : {}),
   };
   try {

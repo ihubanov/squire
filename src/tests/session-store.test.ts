@@ -547,7 +547,10 @@ describe('dropDisconnectedSession', () => {
     setSession(makeMockDriver(del), 'pw-gone');
     expect(listSessions().map((s) => s.sessionId)).toContain('pw-gone');
 
-    const dropped = dropDisconnectedSession('pw-gone', 'attached browser closed');
+    const dropped = dropDisconnectedSession(
+      'pw-gone',
+      'attached browser closed'
+    );
 
     expect(dropped).toBe(true);
     expect(del).not.toHaveBeenCalled(); // must not talk to a dead browser

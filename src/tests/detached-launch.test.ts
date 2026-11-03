@@ -15,9 +15,8 @@ await jest.unstable_mockModule('../activity-log', () => ({
 }));
 
 const { findFreePort, isPortFree } = await import('../free-port.js');
-const { assertNotUserFocused, markSharedWithUser } = await import(
-  '../focus-guard.js'
-);
+const { assertNotUserFocused, markSharedWithUser } =
+  await import('../focus-guard.js');
 
 function occupyPort(): Promise<{ port: number; close: () => Promise<void> }> {
   return new Promise((resolve, reject) => {
@@ -74,23 +73,27 @@ describe('free-port', () => {
 
 describe('focus guard scoping', () => {
   afterEach(() => {
-    delete process.env['APPIUM_MCP_RESPECT_USER_FOCUS'];
+    delete process.env.APPIUM_MCP_RESPECT_USER_FOCUS;
   });
 
   test('does NOT guard a visible tab in a browser we launched ourselves', async () => {
     const page = makeMockPage({ visible: true });
-    await expect(assertNotUserFocused(page, 'click on')).resolves.toBeUndefined();
+    await expect(
+      assertNotUserFocused(page, 'click on')
+    ).resolves.toBeUndefined();
   });
 
   test('by default lets the AI work in the tab the user is looking at', async () => {
     const context = {};
     markSharedWithUser(context as any);
     const page = makeMockPage({ visible: true, context });
-    await expect(assertNotUserFocused(page, 'click on')).resolves.toBeUndefined();
+    await expect(
+      assertNotUserFocused(page, 'click on')
+    ).resolves.toBeUndefined();
   });
 
   test('with APPIUM_MCP_RESPECT_USER_FOCUS=true, guards a visible tab in a user-shared browser', async () => {
-    process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] = 'true';
+    process.env.APPIUM_MCP_RESPECT_USER_FOCUS = 'true';
     const context = {};
     markSharedWithUser(context as any);
     const page = makeMockPage({ visible: true, context });
@@ -100,18 +103,22 @@ describe('focus guard scoping', () => {
   });
 
   test('allows a background tab in a user-shared browser', async () => {
-    process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] = 'true';
+    process.env.APPIUM_MCP_RESPECT_USER_FOCUS = 'true';
     const context = {};
     markSharedWithUser(context as any);
     const page = makeMockPage({ visible: false, context });
-    await expect(assertNotUserFocused(page, 'click on')).resolves.toBeUndefined();
+    await expect(
+      assertNotUserFocused(page, 'click on')
+    ).resolves.toBeUndefined();
   });
 
   test('APPIUM_MCP_RESPECT_USER_FOCUS=false disables the guard entirely', async () => {
-    process.env['APPIUM_MCP_RESPECT_USER_FOCUS'] = 'false';
+    process.env.APPIUM_MCP_RESPECT_USER_FOCUS = 'false';
     const context = {};
     markSharedWithUser(context as any);
     const page = makeMockPage({ visible: true, context });
-    await expect(assertNotUserFocused(page, 'click on')).resolves.toBeUndefined();
+    await expect(
+      assertNotUserFocused(page, 'click on')
+    ).resolves.toBeUndefined();
   });
 });
