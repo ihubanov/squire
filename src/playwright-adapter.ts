@@ -11,6 +11,7 @@ import type {
   ElementHandle,
 } from 'playwright';
 import { randomUUID } from 'node:crypto';
+import { keepUserBrowserConnection } from './cdp-connection.js';
 
 /**
  * Wraps a Playwright Browser + BrowserContext + Page into a single object
@@ -39,6 +40,8 @@ export class PlaywrightDriver {
    * and its pages are the user's real tabs — teardown must not close them.
    */
   readonly attachedToUserBrowser: boolean;
+  /** Set by whoever created the session; undoes its browser listeners. */
+  onDelete?: () => void;
 
   constructor(
     browser: Browser,
@@ -126,7 +129,11 @@ export class PlaywrightDriver {
   /** Clean up: close context and browser. */
   async deleteSession(): Promise<void> {
     this.elements.clear();
+    this.onDelete?.();
     if (this.attachedToUserBrowser) {
+      // Other sessions share this connection, and a new one makes Chrome
+      // ask the user to click Allow again (see cdp-connection.ts).
+      if (keepUserBrowserConnection()) return;
       // We are attached to the user's own browser over CDP. `context` is
       // the user's default context (contexts[0]) and its pages are the
       // user's real tabs — closing it would nuke every tab the user has

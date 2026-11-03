@@ -41,7 +41,7 @@ collect → gather per-tab results; resume/retry only the tabs that failed
 clean → close the tabs you opened
 ```
 
-## The four things that bite you (and how run_script handles them)
+## The five things that bite you (and how run_script handles them)
 
 1. **A submit/click navigates and destroys the JS context.** A raw `playwright_evaluate` that submits a form dies with *"Execution context was destroyed, most likely because of a navigation"* and everything after it is lost. `playwright_run_script` **absorbs the navigation** — the step is marked `navigated: true` and the remaining steps run on the settled new page. Put the post-login check as a later step in the same script; it will run on the far side.
 
@@ -54,6 +54,12 @@ clean → close the tabs you opened
    - **Self-initiated work** (they gave a goal or a URL, not a specific tab): open your **own** tab first with `playwright_new_tab`, so you don't hijack a page the user is using.
 
    When in doubt about which existing tab is "theirs," `playwright_list_tabs` and reason from the URLs/titles — never default to opening a new tab when the user clearly meant an existing one. Only the protected TUI tab is truly off-limits.
+
+   **Several Chrome profiles in one window.** Each profile has its own logins. When Chrome has more than one open, `playwright_list_tabs` groups the tabs by profile, and `playwright_new_tab` opens in the profile of the AI-active tab. To pick a profile, pass one of its tabs as `sameProfileAs`. A tab in the wrong profile shows a login wall instead of the user's account.
+
+   **Allow prompts.** With Chrome's remote-debugging toggle, Chrome asks the user to click Allow when Squire connects. Squire keeps one connection for its whole life, so this happens once, or again only if Chrome drops it. Tell the user before `create_session` that a prompt is coming.
+
+5. **Click like a person.** Use `playwright_run_script` click steps or `appium_click`: they send real mouse events at the element's centre. `element.click()` inside `playwright_evaluate` is an untrusted synthetic event that sites such as LinkedIn ignore. Find elements by visible text and role (`text=…`, ARIA roles), not by a site's CSS class names, which change without notice.
 
 ## Step vocabulary for run_script
 

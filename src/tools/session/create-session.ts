@@ -19,7 +19,14 @@ import { IOSManager } from '../../devicemanager/ios-manager.js';
 import { PlaywrightDriver } from '../../playwright-adapter.js';
 import { markSharedWithUser } from '../../focus-guard.js';
 import { findFreePort } from '../../free-port.js';
-import { resolveCdpEndpoint } from '../../cdp-endpoint.js';
+import {
+  resolveCdpEndpoint,
+  explainAttachError,
+  profileDirForPort,
+  openProfileNames,
+} from '../../cdp-endpoint.js';
+import { getUserBrowser } from '../../cdp-connection.js';
+import { countProfiles } from '../../user-profiles.js';
 import log from '../../logger.js';
 import {
   createUIResource,
@@ -287,7 +294,12 @@ export interface WebSessionOptions {
   viewport?: { width: number; height: number };
   /** Cookies and localStorage for a launched browser (not used when attached to the user's). */
   storageState?: Awaited<ReturnType<BrowserContext['storageState']>>;
+  /** Called if attaching to the user's Chrome is slow, most likely waiting on its Allow prompt. */
+  onWaiting?: (message: string) => void;
 }
+
+/** Long enough for a person to find Chrome's Allow prompt and click it. */
+const CDP_CONNECT_TIMEOUT_MS = 90_000;
 
 /** Open a Playwright browser and make it the active session. */
 export async function openWebSession(opts: WebSessionOptions) {
@@ -341,14 +353,30 @@ export async function openWebSession(opts: WebSessionOptions) {
   let attachedToUserBrowser = false;
   // Why the attach failed, so the caller hears that this is not the user's browser.
   let attachError: string | undefined;
+  // What we attached to, for the session response.
+  let attachedInfo: string | undefined;
 
   if (cdpEndpoint && browserType === 'chromium') {
     log.info(`Attaching to existing Chromium via CDP at ${cdpEndpoint}`);
+    let wsOrHttp = cdpEndpoint;
     try {
-      const wsOrHttp = await resolveCdpEndpoint(cdpEndpoint);
-      // Generous: Chrome's remote-debugging toggle asks the user to
-      // approve each connection, and they need time to click Allow.
-      const b = await chromium.connectOverCDP(wsOrHttp, { timeout: 60_000 });
+      wsOrHttp = await resolveCdpEndpoint(cdpEndpoint);
+      // Chrome's remote-debugging toggle asks the user to approve each new
+      // connection, so all sessions share one (see cdp-connection.ts).
+      const waiting = setTimeout(() => {
+        opts.onWaiting?.(
+          'Waiting for you to click Allow in Chrome (the remote-debugging prompt may be in another Chrome window).'
+        );
+      }, 3000);
+      let b: import('playwright').Browser;
+      let reused: boolean;
+      try {
+        ({ browser: b, reused } = await getUserBrowser(wsOrHttp, (ep) =>
+          chromium.connectOverCDP(ep, { timeout: CDP_CONNECT_TIMEOUT_MS })
+        ));
+      } finally {
+        clearTimeout(waiting);
+      }
       const contexts = b.contexts();
       // viewport:null and no userAgent override — the user's real
       // Chrome already sends a correct, self-consistent UA + client
@@ -385,13 +413,32 @@ export async function openWebSession(opts: WebSessionOptions) {
         await vp.send('Emulation.clearDeviceMetricsOverride');
         await vp.detach().catch(() => {});
       } catch { /* best-effort */ }
+      try {
+        const port = new URL(cdpEndpoint).port;
+        const dir = port ? await profileDirForPort(port) : undefined;
+        const names = dir ? await openProfileNames(dir) : [];
+        const profiles = await countProfiles(b);
+        attachedInfo =
+          `Chrome ${b.version()}` +
+          (names.length ? `, profiles open: ${names.join(', ')}` : '') +
+          (profiles > 1
+            ? `. Tabs are in ${profiles} profiles: playwright_list_tabs groups them, and playwright_new_tab opens in the profile of the AI-active tab (or pass sameProfileAs).`
+            : '') +
+          (reused ? '. Reused the existing connection, no Allow prompt.' : '');
+      } catch { /* description only */ }
     } catch (e) {
+      const reason = explainAttachError(
+        e as Error,
+        cdpEndpoint,
+        wsOrHttp,
+        CDP_CONNECT_TIMEOUT_MS
+      );
       if (cdpRequired) {
         throw new Error(
-          `CDP attach to ${cdpEndpoint} failed (${(e as Error).message}) and APPIUM_MCP_CDP_REQUIRED is set — NOT falling back to a detached launch. Is the shared browser up?`
+          `CDP attach to ${cdpEndpoint} failed (${reason}) and APPIUM_MCP_CDP_REQUIRED is set — NOT falling back to a detached launch.`
         );
       }
-      attachError = (e as Error).message.split('\n')[0];
+      attachError = reason;
       log.warn(
         `Could not attach to CDP endpoint ${cdpEndpoint} (${attachError}); the user's browser is probably not running. Falling back to a detached launch.`
       );
@@ -565,9 +612,12 @@ export async function openWebSession(opts: WebSessionOptions) {
   // the activity log so agents can see the browser vanished.
   // Intentional teardown (delete_session) sets isDeletingSession
   // first, so dropDisconnectedSession no-ops there.
-  browser.on('disconnected', () => {
+  const onDisconnected = () => {
     dropDisconnectedSession(sessionId, 'attached browser closed');
-  });
+  };
+  browser.on('disconnected', onDisconnected);
+  // The attached browser outlives the session, so don't leave the listener behind.
+  pwDriver.onDelete = () => browser.off('disconnected', onDisconnected);
 
   log.info(
     `WEB session created successfully with ID: ${sessionId}`
@@ -583,6 +633,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     cdpPort,
     attachedToUserBrowser,
     attachError,
+    attachedInfo,
   };
 }
 
@@ -682,11 +733,13 @@ export default function createSession(server: any): void {
             cdpPort,
             attachedToUserBrowser,
             attachError,
+            attachedInfo,
           } = await openWebSession({
             browser: args.browser,
             headless: args.headless,
             url: args.url,
             viewport: args.viewport,
+            onWaiting: (m) => _context?.log?.info?.(m),
           });
 
           const totalSessions = listSessions().length;
@@ -695,7 +748,7 @@ export default function createSession(server: any): void {
             content: [
               {
                 type: 'text',
-                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? '\nMode: attached to user browser (CDP)' : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. If they use Chrome's remote-debugging toggle, they may need to click Allow in Chrome; then delete this session and create it again.` : ''}`,
+                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? `\nMode: attached to user browser (CDP)${attachedInfo ? `: ${attachedInfo}` : ''}` : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. Fix that, then delete this session and create it again.` : ''}`,
               },
             ],
           };

@@ -8,6 +8,74 @@ import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { writeAiActiveTab } from '../../ai-state.js';
 import { logActivity } from '../../activity-log.js';
+import type { PlaywrightDriver } from '../../playwright-adapter.js';
+import {
+  countProfiles,
+  openTabInProfileOf,
+  pageProfileId,
+  profileLabels,
+} from '../../user-profiles.js';
+
+/** A tab given as an index or a stable tab id. */
+function findTab(
+  driver: PlaywrightDriver,
+  ref: number | string
+): import('playwright').Page | undefined {
+  if (typeof ref === 'number') return driver.context.pages()[ref];
+  return /^\d+$/.test(ref)
+    ? driver.context.pages()[Number(ref)]
+    : driver.resolvePage(ref);
+}
+
+/**
+ * Attached to the user's Chrome: open the tab in the opener's profile, so it
+ * has that profile's logins. Returns undefined when this is not needed (one
+ * profile, nothing asked), so the caller opens the tab the usual way.
+ */
+async function openInProfile(
+  driver: PlaywrightDriver,
+  sameProfileAs: number | string | undefined
+): Promise<{ page?: import('playwright').Page; note: string }> {
+  if (!driver.attachedToUserBrowser) {
+    if (sameProfileAs !== undefined) {
+      return { note: 'sameProfileAs ignored: this browser is not the user\'s Chrome.' };
+    }
+    return { note: '' };
+  }
+  const explicit = sameProfileAs !== undefined;
+  if (!explicit && (await countProfiles(driver.browser)) < 2) return { note: '' };
+  const opener = explicit ? findTab(driver, sameProfileAs) : driver.page;
+  if (!opener) {
+    throw new Error(`No tab ${sameProfileAs}. Use playwright_list_tabs for indexes and ids.`);
+  }
+  const at = driver.context.pages().indexOf(opener);
+  try {
+    assertNotProtected(opener.url(), 'open a tab from');
+    const page = await openTabInProfileOf(driver.context, opener);
+    const [want, got] = await Promise.all([
+      pageProfileId(driver.context, opener),
+      pageProfileId(driver.context, page),
+    ]);
+    if (want && got && want !== got) {
+      await page.close().catch(() => {});
+      throw new Error('the new tab landed in a different profile');
+    }
+    return {
+      page,
+      note: `Opened from tab ${at}, so it is in that tab's Chrome profile with its logins. Chrome may have brought it to the front.`,
+    };
+  } catch (e) {
+    const why = (e as Error).message.split('\n')[0];
+    if (explicit) {
+      throw new Error(
+        `Could not open a tab in the profile of tab ${sameProfileAs} (${why}). Pick a regular web page tab in that profile.`
+      );
+    }
+    return {
+      note: `WARNING: Chrome has several profiles open and the tab could not be opened from the AI-active tab ${at} (${why}), so it may be in a different profile than you want. Check playwright_list_tabs, and pass sameProfileAs with a web page tab from the right profile.`,
+    };
+  }
+}
 
 export function newTab(server: FastMCP): void {
   const newTabSchema = z.object({
@@ -20,6 +88,12 @@ export function newTab(server: FastMCP): void {
       .optional()
       .describe(
         'Whether to bring the new tab to the foreground in the user\'s window. Default false — new tabs open in the background so the AI doesn\'t steal focus from the user. Set true only if the user explicitly asked you to show them the new tab.',
+      ),
+    sameProfileAs: z
+      .union([z.number().int().min(0), z.string()])
+      .optional()
+      .describe(
+        'Attached to the user\'s Chrome only: open the tab in the same Chrome profile, with the same logins, as this tab (index or tab id from playwright_list_tabs). When Chrome has several profiles open the default is the profile of the AI-active tab.',
       ),
   });
 
@@ -45,9 +119,14 @@ export function newTab(server: FastMCP): void {
 
       try {
         const wantBackground = args.bringToFront !== true;
+        const inProfile = await openInProfile(driver, args.sameProfileAs);
         let page: import('playwright').Page;
 
-        if (wantBackground) {
+        if (inProfile.page) {
+          page = inProfile.page;
+          if (args.url) await page.goto(args.url);
+          if (!wantBackground) await page.bringToFront();
+        } else if (wantBackground) {
           // True background creation via CDP — Chromium never foregrounds
           // the new tab, so the user's focused tab doesn't even flicker.
           // We can't use context.newPage() which always steals focus.
@@ -94,7 +173,7 @@ export function newTab(server: FastMCP): void {
               type: 'text',
               text: `New tab opened at index ${newIndex} (${
                 wantBackground ? 'in background — user focus preserved' : 'foregrounded'
-              }).\nURL: ${url}\nTitle: ${title}\nTotal tabs: ${pages.length}`,
+              }).\nURL: ${url}\nTitle: ${title}\nTotal tabs: ${pages.length}${inProfile.note ? `\n${inProfile.note}` : ''}`,
             },
           ],
         };
@@ -221,12 +300,33 @@ export function listTabs(server: FastMCP): void {
           })
         );
 
+        // Attached to the user's Chrome with several profiles open: group
+        // the tabs by profile, since each profile has its own logins.
+        let listing = tabInfo.join('\n');
+        if (driver.attachedToUserBrowser && pages.length > 1) {
+          const ids = await Promise.all(
+            pages.map((p) => pageProfileId(driver.context, p))
+          );
+          const labels = profileLabels(ids);
+          if (labels.size > 1) {
+            const groups = [...labels.entries()].map(([pid, label]) =>
+              [`${label}:`, ...tabInfo.filter((_, i) => ids[i] === pid)].join('\n')
+            );
+            const unknown = tabInfo.filter((_, i) => !ids[i] || !labels.has(ids[i]!));
+            if (unknown.length) groups.push(['profile unknown:', ...unknown].join('\n'));
+            listing =
+              groups.join('\n') +
+              '\n\nEach Chrome profile has its own logins. CDP does not give profile names; tell them apart by the tabs. ' +
+              'To open a tab in a given profile, pass one of its tabs as sameProfileAs to playwright_new_tab.';
+          }
+        }
+
         return {
           content: [
             {
               type: 'text',
               text:
-                `Open tabs (${pages.length}):\n${tabInfo.join('\n')}\n\n` +
+                `Open tabs (${pages.length}):\n${listing}\n\n` +
                 `Pass a tab id (e.g. "${driver.getTabId(currentPage)}") as the \`tab\` ` +
                 `argument to playwright_run_script to drive that tab directly, even in the background.`,
             },
