@@ -32,6 +32,8 @@ jobs:
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but package.json is $v"; exit 1; }
       - run: npm install
       - run: npm run build
+      # The web tests drive a real Chromium.
+      - run: npx playwright install --with-deps chromium
       - run: npm test
       # Trusted publishing needs npm 11.5.1 or newer. Upgrade only now:
       # npm 11 lays out the Appium packages differently and their types
