@@ -1,0 +1,90 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;width:1280px;height:640px;overflow:hidden}
+  body{background:radial-gradient(1200px 700px at 78% 40%,#1b2a4a 0%,#0d1324 55%,#080b16 100%);
+    font-family:"Inter","Segoe UI","Helvetica Neue",Arial,sans-serif;color:#eef2fb;position:relative}
+  .grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:40px 40px}
+  .left{position:absolute;left:110px;top:120px;width:500px}
+  .mark{display:flex;align-items:center;gap:18px}
+  .logo{width:78px;height:78px;border-radius:20px;background:linear-gradient(135deg,#ffb547,#ff7a3d);
+    display:flex;align-items:center;justify-content:center;box-shadow:0 10px 30px rgba(255,140,60,.35)}
+  h1{font-size:112px;line-height:1;margin:0;font-weight:800;letter-spacing:-3px}
+  .hook{font-size:40px;line-height:1.18;font-weight:700;margin:34px 0 0;color:#fff}
+  .hook em{font-style:normal;color:#ffb547}
+  .sub{font-size:24px;color:#9fb0d3;margin-top:18px;line-height:1.35}
+  .chips{display:flex;gap:12px;margin-top:30px}
+  .chip{font-size:22px;font-weight:700;padding:9px 18px;border-radius:999px;border:2px solid #3a4c78;color:#d6def2;background:rgba(255,255,255,.04)}
+  /* browser */
+  .browser{position:absolute;left:660px;top:110px;width:500px;height:350px;border-radius:16px;background:#f5f7fb;
+    box-shadow:0 30px 70px rgba(0,0,0,.55);overflow:hidden}
+  .bar{height:38px;background:#e3e8f2;display:flex;align-items:center;gap:8px;padding:0 14px}
+  .dot{width:12px;height:12px;border-radius:50%}
+  .url{margin-left:14px;flex:1;height:20px;border-radius:10px;background:#fff}
+  .page{position:relative;padding:22px 26px}
+  .ln{height:14px;border-radius:7px;background:#d5dbe8;margin-bottom:12px}
+  .field{height:38px;border-radius:8px;border:2px solid #cfd6e4;background:#fff;margin:16px 0 0}
+  .btn{position:absolute;left:26px;top:160px;width:170px;height:48px;border-radius:10px;background:#2f6bff}
+  .dim{position:absolute;inset:38px 0 0 0;background:rgba(8,12,24,.55);
+    -webkit-mask:radial-gradient(ellipse 120px 52px at 111px 146px,transparent 98%,#000 100%);
+    mask:radial-gradient(ellipse 120px 52px at 111px 146px,transparent 98%,#000 100%)}
+  .ring{position:absolute;left:12px;top:146px;width:198px;height:76px;border-radius:40px;border:4px solid #ffb547;box-shadow:0 0 24px rgba(255,181,71,.8)}
+  .caption{position:absolute;left:60px;top:282px;width:auto;background:#ffb547;color:#1a1300;font-weight:800;font-size:22px;
+    padding:12px 16px;border-radius:12px;line-height:1.2;box-shadow:0 8px 20px rgba(0,0,0,.35)}
+  /* phone */
+  .phone{position:absolute;left:1000px;top:250px;width:160px;height:300px;border-radius:30px;background:#11182b;border:6px solid #2a3554;
+    box-shadow:0 30px 60px rgba(0,0,0,.6);overflow:hidden}
+  .scr{position:absolute;inset:14px 10px;border-radius:18px;background:linear-gradient(180deg,#24345e,#162243);padding:16px 12px;box-sizing:border-box}
+  .pl{height:10px;border-radius:5px;background:rgba(255,255,255,.22);margin-bottom:10px}
+  .tile{display:inline-block;width:52px;height:52px;border-radius:12px;margin:6px 4px 0 0;background:rgba(255,255,255,.14)}
+  .tile.hot{background:#3ddc97;box-shadow:0 0 0 4px rgba(61,220,151,.35)}
+  svg.over{position:absolute;inset:0;pointer-events:none}
+</style></head>
+<body>
+<div class="grid"></div>
+
+<div class="left">
+  <div class="mark">
+    <div class="logo">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#1a1300" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2l7 3v6c0 5-3.5 9-7 11-3.5-2-7-6-7-11V5z"/><path d="M8.5 12l2.5 2.5 4.5-5"/>
+      </svg>
+    </div>
+    <h1>Squire</h1>
+  </div>
+  <div class="hook">Hands for your AI agents on <em>real browsers</em> and <em>phones</em></div>
+  <div class="sub">Drives your own Chrome, Android &amp; iOS — or shows you where to click.</div>
+  <div class="chips"><span class="chip">Playwright</span><span class="chip">Appium</span><span class="chip">MCP</span></div>
+</div>
+
+<div class="browser">
+  <div class="bar"><span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span><span class="url"></span></div>
+  <div class="page">
+    <div class="ln" style="width:60%;height:20px;background:#b9c3d8"></div>
+    <div class="ln" style="width:88%"></div><div class="ln" style="width:74%"></div>
+  </div>
+  <div class="btn"></div>
+  <div class="dim"></div>
+  <div class="ring"></div>
+  <div class="caption">Click here to publish</div>
+</div>
+
+<div class="phone"><div class="scr">
+  <div class="pl" style="width:70%"></div><div class="pl" style="width:50%"></div>
+  <div><span class="tile"></span><span class="tile hot"></span></div>
+  <div><span class="tile"></span><span class="tile"></span></div>
+</div></div>
+
+<svg class="over" width="1280" height="640">
+  <defs>
+    <marker id="ah" markerWidth="10" markerHeight="10" refX="6" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ffb547"/></marker>
+  </defs>
+  <!-- arrow from caption to the button -->
+    <path d="M800 388 Q 812 365 790 344" fill="none" stroke="#ffb547" stroke-width="5" stroke-linecap="round" marker-end="url(#ah)"/>
+  <!-- cursor on the phone tile -->
+  <g transform="translate(1100 400)">
+    <path d="M0 0 L0 30 L8 23 L14 36 L20 33 L14 21 L25 21 z" fill="#fff" stroke="#0d1324" stroke-width="2"/>
+  </g>
+</svg>
+</body></html>

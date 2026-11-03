@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ihubanov/squire/main/docs/assets/squire-banner.png" alt="Squire: hands for your AI agents on real browsers and phones. An agent drives a browser with a spotlight and arrow pointing at a button, and taps a phone." width="100%">
+</p>
+
 # Squire — hands for AI agents on real browsers and phones (MCP)
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
