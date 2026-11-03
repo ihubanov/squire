@@ -34,6 +34,9 @@ async function startServer(): Promise<void> {
 
       log.info('Server started with stdio transport');
       log.info('Waiting for client connections...');
+      // The client is gone when stdin closes. Exit (through the SIGTERM
+      // cleanup) instead of lingering and holding browser connections.
+      process.stdin.on('end', () => process.kill(process.pid, 'SIGTERM'));
     }
   } catch (error: any) {
     log.error('Error starting server:', error);
