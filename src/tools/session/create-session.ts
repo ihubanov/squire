@@ -19,6 +19,7 @@ import { IOSManager } from '../../devicemanager/ios-manager.js';
 import { PlaywrightDriver } from '../../playwright-adapter.js';
 import { markSharedWithUser } from '../../focus-guard.js';
 import { findFreePort } from '../../free-port.js';
+import { resolveCdpEndpoint } from '../../cdp-endpoint.js';
 import log from '../../logger.js';
 import {
   createUIResource,
@@ -338,11 +339,16 @@ export async function openWebSession(opts: WebSessionOptions) {
   // dead endpoint (the user's Chromium isn't running right now)
   // falls back to a detached launch instead of failing the session.
   let attachedToUserBrowser = false;
+  // Why the attach failed, so the caller hears that this is not the user's browser.
+  let attachError: string | undefined;
 
   if (cdpEndpoint && browserType === 'chromium') {
     log.info(`Attaching to existing Chromium via CDP at ${cdpEndpoint}`);
     try {
-      const b = await chromium.connectOverCDP(cdpEndpoint);
+      const wsOrHttp = await resolveCdpEndpoint(cdpEndpoint);
+      // Generous: Chrome's remote-debugging toggle asks the user to
+      // approve each connection, and they need time to click Allow.
+      const b = await chromium.connectOverCDP(wsOrHttp, { timeout: 60_000 });
       const contexts = b.contexts();
       // viewport:null and no userAgent override — the user's real
       // Chrome already sends a correct, self-consistent UA + client
@@ -385,8 +391,9 @@ export async function openWebSession(opts: WebSessionOptions) {
           `CDP attach to ${cdpEndpoint} failed (${(e as Error).message}) and APPIUM_MCP_CDP_REQUIRED is set — NOT falling back to a detached launch. Is the shared browser up?`
         );
       }
+      attachError = (e as Error).message.split('\n')[0];
       log.warn(
-        `Could not attach to CDP endpoint ${cdpEndpoint} (${(e as Error).message}); the user's browser is probably not running. Falling back to a detached launch.`
+        `Could not attach to CDP endpoint ${cdpEndpoint} (${attachError}); the user's browser is probably not running. Falling back to a detached launch.`
       );
     }
   }
@@ -575,6 +582,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     initialUrl,
     cdpPort,
     attachedToUserBrowser,
+    attachError,
   };
 }
 
@@ -673,6 +681,7 @@ export default function createSession(server: any): void {
             initialUrl,
             cdpPort,
             attachedToUserBrowser,
+            attachError,
           } = await openWebSession({
             browser: args.browser,
             headless: args.headless,
@@ -686,7 +695,7 @@ export default function createSession(server: any): void {
             content: [
               {
                 type: 'text',
-                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? '\nMode: attached to user browser (CDP)' : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}\nActive sessions: ${totalSessions}`,
+                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? '\nMode: attached to user browser (CDP)' : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. If they use Chrome's remote-debugging toggle, they may need to click Allow in Chrome; then delete this session and create it again.` : ''}`,
               },
             ],
           };

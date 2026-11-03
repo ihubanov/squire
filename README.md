@@ -29,13 +29,14 @@ This installs the web-driving and presenting skills, the `browser-driver` and `p
 ```bash
 npx @sniffski/squire          # stdio MCP server
 ```
-Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222` and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`.
+Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222`, or turn on "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`, and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`. The toggle has no `/json` discovery, so Squire reads the browser's WebSocket URL from `DevToolsActivePort` in the Chrome profile directory, and Chrome asks you to click Allow on each connection.
 
 ## Configuration (env)
 
 | Var | Purpose |
 |-----|---------|
 | `APPIUM_MCP_CDP_ENDPOINT` | Attach to a running Chrome (e.g. `http://localhost:9222`). Unset → launches its own detached browser. |
+| `APPIUM_MCP_CHROME_PROFILE_DIR` | Chrome profile directory to read `DevToolsActivePort` from, when it isn't the default Chrome/Chromium one. |
 | `APPIUM_MCP_RESPECT_USER_FOCUS` | `false` to let the AI act on the focused tab (default guards it). |
 | `APPIUM_MCP_VISION_MODEL` / `APPIUM_MCP_VISION_PYTHON` | Enable the ONNX icon detector (path to the `.onnx` + a Python with `onnxruntime`). OCR text grounding works without them. |
 
