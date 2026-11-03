@@ -1,14 +1,14 @@
 {
   "name": "@sniffski/squire",
-  "mcpName": "io.github.ihubanov/appium-mcp",
+  "mcpName": "io.github.ihubanov/squire",
   "version": "1.31.3",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/ihubanov/appium-mcp.git"
+    "url": "https://github.com/ihubanov/squire.git"
   },
   "bugs": {
-    "url": "https://github.com/ihubanov/appium-mcp/issues"
+    "url": "https://github.com/ihubanov/squire/issues"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -110,7 +110,7 @@
   "engines": {
     "node": ">=18"
   },
-  "homepage": "https://github.com/ihubanov/appium-mcp#readme",
+  "homepage": "https://github.com/ihubanov/squire#readme",
   "keywords": [
     "mcp",
     "squire",
