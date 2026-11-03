@@ -1,47 +1,49 @@
 name: Release
 
+# Push a tag vX.Y.Z (matching package.json) to publish that version to npm.
+# npm authenticates this workflow through its Trusted Publisher (OIDC) setting
+# for @sniffski/squire, so no token or 2FA prompt is involved.
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: write
-  pull-requests: write
-  issues: write
-  id-token: write # to enable use of OIDC for trusted publishing and npm provenance
+  id-token: write # OIDC for npm trusted publishing, provenance and the MCP Registry
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-          fetch-depth: 0 # Fetch all tags for version detection
       - name: Setup submodules sparse-checkout
         run: |
           chmod +x scripts/setup-submodules-sparse.sh
           ./scripts/setup-submodules-sparse.sh
       - uses: actions/setup-node@v6
         with:
-          node-version: lts/*
-          check-latest: true
-      - run: npm install
-        name: Install dependencies
-      - run: npm run build
-        name: Build
-      - run: npx semantic-release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        name: Release
-
-      - name: Install mcp-publisher
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@latest
+      - name: Tag must match package.json
         run: |
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+          v=$(node -p "require('./package.json').version")
+          [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but package.json is $v"; exit 1; }
+      - run: npm install
+      - run: npm run build
+      - run: npm test
+      - run: npm publish --access public --ignore-scripts
+      - name: GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Authenticate to MCP Registry
-        run: ./mcp-publisher login github-oidc
-
-      - name: Publish server to MCP Registry
-        run: ./mcp-publisher publish
+      - name: Publish to the MCP Registry
+        continue-on-error: true
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
