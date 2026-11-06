@@ -1,7 +1,7 @@
 {
   "name": "@sniffski/squire",
   "mcpName": "io.github.ihubanov/squire",
-  "version": "1.32.0",
+  "version": "1.32.1",
   "type": "module",
   "repository": {
     "type": "git",
@@ -39,7 +39,7 @@
   },
   "author": "ihubanov",
   "license": "Apache-2.0",
-  "description": "Squire \u2014 AI-native desktop & browser automation over MCP: drive a real browser like a human (multi-tab, navigation-tolerant scripts, vision grounding). Built on the appium-mcp foundation; retains Appium mobile tools. Not affiliated with Appium.",
+  "description": "Squire — AI-native desktop & browser automation over MCP: drive a real browser like a human (multi-tab, navigation-tolerant scripts, vision grounding). Built on the appium-mcp foundation; retains Appium mobile tools. Not affiliated with Appium.",
   "dependencies": {
     "@appium/support": "^7.0.2",
     "@langchain/classic": "^1.0.10",
@@ -122,5 +122,8 @@
     "ai-agent",
     "cdp",
     "appium"
-  ]
+  ],
+  "overrides": {
+    "@opentelemetry/exporter-trace-otlp-http": "~0.300.0"
+  }
 }
