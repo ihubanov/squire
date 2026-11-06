@@ -194,7 +194,8 @@ export function explainAttachError(
       : `the browser gate at ${endpoint} cannot reach herdr-web (423 unreachable), so it refuses all connections. This is an infrastructure problem, not the user taking control${hint ? `: ${hint}` : ''}.`;
   }
   if (isControlRevoked(err)) {
-    return `${CONTROL_REVOKED_PREFIX} ${endpoint} refused the connection (403), so the user has taken control of this browser. Stop and ask the user in chat before trying again; do not retry on your own.`;
+    const status = /Unexpected server response: (\d+)/.exec(msg)?.[1];
+    return `${CONTROL_REVOKED_PREFIX} ${endpoint} refused the connection${status ? ` (${status})` : ''}, so the user has taken control of this browser. Stop and ask the user in chat before trying again; do not retry on your own.`;
   }
   if (msg.startsWith(ACCEPTED_PREFIX)) {
     return msg.split('\n')[0];

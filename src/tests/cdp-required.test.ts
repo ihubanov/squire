@@ -280,7 +280,7 @@ describe('per-session cdpEndpoint', () => {
     const g = await lockedGate('unheld');
     try {
       await expect(web({ cdpEndpoint: `127.0.0.1:${g.port}` })).rejects.toThrow(
-        /Control revoked:/
+        /Control revoked: .* refused the connection \(423\)/
       );
       await expect(
         web({ cdpEndpoint: `ws://127.0.0.1:${g.port}/devtools/browser/x` })
