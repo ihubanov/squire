@@ -10,6 +10,7 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { refusedError } from './cdp-proxy.js';
 
 /** Profile directories Chrome/Chromium write DevToolsActivePort into. */
 export function profileDirs(): string[] {
@@ -66,8 +67,8 @@ export async function toBrowserWebSocketUrl(endpoint: string): Promise<string> {
   const res = await fetch(new URL('/json/version', endpoint), {
     signal: AbortSignal.timeout(5000),
   });
-  if (res.status === 401 || res.status === 403) {
-    throw new Error(`Unexpected server response: ${res.status}`);
+  if (res.status === 401 || res.status === 403 || res.status === 423) {
+    throw refusedError(res.status, await res.text().catch(() => ''));
   }
   const { webSocketDebuggerUrl } = (await res.json()) as {
     webSocketDebuggerUrl?: string;
@@ -148,11 +149,27 @@ export function assertAllowedCdpHost(endpoint: string): void {
  */
 export const CONTROL_REVOKED_PREFIX = 'Control revoked:';
 
+/**
+ * 401/403, or 423 (herdr's pane gate: "Locked") unless its reason says the
+ * gate itself is misconfigured or cut off. An unknown 423 counts as
+ * revoked: better to stop and ask than to fight the user for the screen.
+ */
 export function isControlRevoked(err: Error): boolean {
-  return (
-    err.message.startsWith(CONTROL_REVOKED_PREFIX) ||
-    /Unexpected server response: 40[13]\b/.test(err.message)
-  );
+  const m = err.message;
+  if (m.startsWith(CONTROL_REVOKED_PREFIX)) {
+    return true;
+  }
+  if (/Unexpected server response: 40[13]\b/.test(m)) {
+    return true;
+  }
+  return /Unexpected server response: 423\b/.test(m) && !gateFault(m);
+}
+
+/** herdr's gate refusing for its own reasons, not because the user took over. */
+function gateFault(msg: string): string | undefined {
+  return /Unexpected server response: 423 \((unauthorized|unreachable)\)/.exec(
+    msg
+  )?.[1];
 }
 
 /** Prefix for an attach that got past Allow but failed afterwards. */
@@ -169,6 +186,13 @@ export function explainAttachError(
   timeoutMs: number
 ): string {
   const msg = err.message;
+  const fault = gateFault(msg);
+  if (fault) {
+    const hint = /: (.*)$/.exec(msg.split('\n')[0]!)?.[1];
+    return fault === 'unauthorized'
+      ? `the browser gate at ${endpoint} rejected Squire's credentials (423 unauthorized). This is a configuration problem, not the user taking control${hint ? `: ${hint}` : ''}.`
+      : `the browser gate at ${endpoint} cannot reach herdr-web (423 unreachable), so it refuses all connections. This is an infrastructure problem, not the user taking control${hint ? `: ${hint}` : ''}.`;
+  }
   if (isControlRevoked(err)) {
     return `${CONTROL_REVOKED_PREFIX} ${endpoint} refused the connection (403), so the user has taken control of this browser. Stop and ask the user in chat before trying again; do not retry on your own.`;
   }

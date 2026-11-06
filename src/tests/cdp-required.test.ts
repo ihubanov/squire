@@ -251,4 +251,65 @@ describe('per-session cdpEndpoint', () => {
       await new Promise<void>((r) => gate.close(() => r()));
     }
   });
+
+  async function lockedGate(reason: string) {
+    const http = await import('node:http');
+    const body = JSON.stringify({
+      error: 'locked',
+      reason,
+      pane: 1,
+      hint: `hint for ${reason}`,
+    });
+    const gate = http.createServer((_req, res) => {
+      res.writeHead(423, { 'content-type': 'application/json' }).end(body);
+    });
+    gate.on('upgrade', (_req, socket) => {
+      socket.end(
+        `HTTP/1.1 423 Locked\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\n\r\n${body}`
+      );
+    });
+    await new Promise<void>((r) => gate.listen(0, '127.0.0.1', r));
+    const port = (gate.address() as import('node:net').AddressInfo).port;
+    return {
+      port,
+      close: () => new Promise<void>((r) => gate.close(() => r())),
+    };
+  }
+
+  test('herdr 423 "unheld" is control revoked, over http and ws', async () => {
+    const g = await lockedGate('unheld');
+    try {
+      await expect(web({ cdpEndpoint: `127.0.0.1:${g.port}` })).rejects.toThrow(
+        /Control revoked:/
+      );
+      await expect(
+        web({ cdpEndpoint: `ws://127.0.0.1:${g.port}/devtools/browser/x` })
+      ).rejects.toThrow(/Control revoked:/);
+      expect(launch).not.toHaveBeenCalled();
+    } finally {
+      await g.close();
+    }
+  });
+
+  test('herdr 423 "unauthorized" and "unreachable" are config errors, not a takeover', async () => {
+    for (const [reason, re] of [
+      ['unauthorized', /rejected Squire's credentials.*hint for unauthorized/],
+      ['unreachable', /cannot reach herdr-web.*hint for unreachable/],
+    ] as const) {
+      const g = await lockedGate(reason);
+      try {
+        for (const cdpEndpoint of [
+          `127.0.0.1:${g.port}`,
+          `ws://127.0.0.1:${g.port}/devtools/browser/x`,
+        ]) {
+          const err = await web({ cdpEndpoint }).catch((e: Error) => e);
+          expect((err as Error).message).toMatch(re);
+          expect((err as Error).message).not.toMatch(/Control revoked/);
+        }
+      } finally {
+        await g.close();
+      }
+    }
+    expect(launch).not.toHaveBeenCalled();
+  });
 });

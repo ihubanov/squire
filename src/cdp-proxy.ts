@@ -49,6 +49,23 @@ interface Pending {
  * refused connection or after `timeoutMs`. `onWaiting` fires if Chrome has
  * not answered after a few seconds, which usually means its Allow prompt is up.
  */
+/** "Unexpected server response: <status>", plus the gate's reason and hint if any. */
+export function refusedError(status: number, body: string): Error {
+  let reason = '';
+  let hint = '';
+  try {
+    const j = JSON.parse(body) as { reason?: unknown; hint?: unknown };
+    reason = typeof j.reason === 'string' ? j.reason : '';
+    hint = typeof j.hint === 'string' ? j.hint : '';
+  } catch {
+    /* not JSON */
+  }
+  const err = new Error(
+    `Unexpected server response: ${status}${reason ? ` (${reason})` : ''}${hint ? `: ${hint}` : ''}`
+  );
+  return err;
+}
+
 export async function openCdpRelay(
   upstreamUrl: string,
   timeoutMs: number,
@@ -78,6 +95,24 @@ export async function openCdpRelay(
       clearTimeout(timer);
       clearTimeout(waiting);
       reject(e);
+    });
+    // A refused upgrade: keep the status and the gate's reason (herdr's
+    // pane gate answers 423 {reason}), which ws's own error drops.
+    upstream.once('unexpected-response', (_req, res) => {
+      clearTimeout(timer);
+      clearTimeout(waiting);
+      let body = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => {
+        if (body.length < 4096) {
+          body += c;
+        }
+      });
+      res.on('end', () => {
+        upstream.terminate();
+        reject(refusedError(res.statusCode ?? 0, body));
+      });
+      res.on('error', () => reject(refusedError(res.statusCode ?? 0, '')));
     });
   });
   trace(`upstream open ${upstreamUrl}`);
