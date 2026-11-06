@@ -163,3 +163,92 @@ describe('APPIUM_MCP_CDP_REQUIRED hard-fail mode', () => {
     expect(launch).toHaveBeenCalled();
   });
 });
+
+describe('per-session cdpEndpoint', () => {
+  beforeEach(() => {
+    connectOverCDP.mockClear();
+    launch.mockClear();
+    delete process.env.APPIUM_MCP_CDP_ENDPOINT;
+    delete process.env.APPIUM_MCP_CDP_REQUIRED;
+    delete process.env.APPIUM_MCP_CDP_ALLOWED_HOSTS;
+  });
+  afterEach(() => {
+    delete process.env.APPIUM_MCP_CDP_ENDPOINT;
+    delete process.env.APPIUM_MCP_CDP_ALLOWED_HOSTS;
+  });
+
+  const web = (extra: Record<string, unknown>) =>
+    cfg.execute(
+      { platform: 'web', browser: 'chromium', headless: true, ...extra },
+      {}
+    );
+
+  test('a dead explicit endpoint throws and never launches a browser', async () => {
+    await expect(web({ cdpEndpoint: 'http://127.0.0.1:9402' })).rejects.toThrow(
+      /cdpEndpoint was given — NOT falling back/
+    );
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  test('host:port without a scheme means http, and the arg beats the env', async () => {
+    process.env.APPIUM_MCP_CDP_ENDPOINT = 'http://127.0.0.1:9401';
+    await expect(web({ cdpEndpoint: '127.0.0.1:9403' })).rejects.toThrow(
+      /CDP attach to http:\/\/127\.0\.0\.1:9403 failed/
+    );
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  test('non-loopback hosts are refused unless allowed', async () => {
+    await expect(web({ cdpEndpoint: 'http://10.1.2.3:9222' })).rejects.toThrow(
+      /not allowed/
+    );
+    process.env.APPIUM_MCP_CDP_ALLOWED_HOSTS = '*';
+    await expect(
+      web({ cdpEndpoint: 'http://squire-test.invalid:9222' })
+    ).rejects.toThrow(/cdpEndpoint was given/);
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  test('a non-chromium browser with an explicit endpoint throws', async () => {
+    await expect(
+      cfg.execute(
+        {
+          platform: 'web',
+          browser: 'firefox',
+          headless: true,
+          cdpEndpoint: '127.0.0.1:9402',
+        },
+        {}
+      )
+    ).rejects.toThrow(/cdpEndpoint was given but browserType=firefox/);
+    expect(launch).not.toHaveBeenCalled();
+  });
+
+  test('a 403 from the endpoint is "control revoked", even without REQUIRED', async () => {
+    const http = await import('node:http');
+    let hits = 0;
+    const gate = http.createServer((_req, res) => {
+      hits++;
+      res.writeHead(403).end();
+    });
+    gate.on('upgrade', (_req, socket) => {
+      hits++;
+      socket.end('HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n');
+    });
+    await new Promise<void>((r) => gate.listen(0, '127.0.0.1', r));
+    const port = (gate.address() as import('node:net').AddressInfo).port;
+    try {
+      process.env.APPIUM_MCP_CDP_ENDPOINT = `http://127.0.0.1:${port}`;
+      await expect(web({})).rejects.toThrow(/Control revoked:.*do not retry/);
+      const before = hits;
+      await expect(web({ cdpEndpoint: `127.0.0.1:${port}` })).rejects.toThrow(
+        /Control revoked:/
+      );
+      // One attempt per call: discovery, then the version lookup. No retry loop.
+      expect(hits - before).toBeLessThanOrEqual(2);
+      expect(launch).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((r) => gate.close(() => r()));
+    }
+  });
+});

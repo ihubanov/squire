@@ -8,7 +8,16 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Browser } from 'playwright';
-import { getUserBrowser, resetUserBrowser } from '../cdp-connection.js';
+import {
+  acquireUserBrowser,
+  getRelay,
+  getUserBrowser,
+  releaseUserBrowser,
+  resetUserBrowser,
+  userCount,
+} from '../cdp-connection.js';
+import { WebSocketServer } from 'ws';
+import type { AddressInfo } from 'node:net';
 import {
   explainAttachError,
   openProfileNames,
@@ -159,5 +168,51 @@ describe('profile names', () => {
       ['b', 'profile A'],
       ['a', 'profile B'],
     ]);
+  });
+});
+
+describe('one pool per browser', () => {
+  beforeEach(() => resetUserBrowser());
+  afterAll(() => {
+    delete process.env.APPIUM_MCP_CDP_KEEP_CONNECTION;
+  });
+
+  test('two browsers get their own relays and session counts', async () => {
+    const servers = await Promise.all(
+      [0, 1].map(async () => {
+        const s = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+        await new Promise<void>((r) => s.once('listening', () => r()));
+        return s;
+      })
+    );
+    const [a, b] = servers.map(
+      (s) =>
+        `ws://127.0.0.1:${(s.address() as AddressInfo).port}/devtools/browser/x`
+    ) as [string, string];
+    try {
+      const ra = await getRelay(a, 5000);
+      const rb = await getRelay(b, 5000);
+      expect(ra.relay.url).not.toBe(rb.relay.url);
+      expect((await getRelay(a, 5000)).fresh).toBe(false);
+
+      acquireUserBrowser(a);
+      acquireUserBrowser(a);
+      acquireUserBrowser(b);
+      process.env.APPIUM_MCP_CDP_KEEP_CONNECTION = '0';
+      releaseUserBrowser(a);
+      expect(userCount(a)).toBe(1);
+      releaseUserBrowser(a);
+      expect(userCount(a)).toBe(0);
+      // Closing a's connection leaves b's alone.
+      expect(ra.relay.isOpen()).toBe(false);
+      expect(rb.relay.isOpen()).toBe(true);
+      expect(userCount(b)).toBe(1);
+      releaseUserBrowser(b);
+      expect(rb.relay.isOpen()).toBe(false);
+    } finally {
+      await Promise.all(
+        servers.map((s) => new Promise<void>((r) => s.close(() => r())))
+      );
+    }
   });
 });

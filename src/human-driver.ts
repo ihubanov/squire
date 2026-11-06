@@ -207,7 +207,10 @@ export async function runScript(
       }
       completed++;
     } catch (err) {
-      if (looksLikeNavigation(err)) {
+      // A closed page (or a browser connection that went away, e.g. the
+      // user took control) is not a navigation: every later step would
+      // "succeed" the same way.
+      if (looksLikeNavigation(err) && !page.isClosed()) {
         // The step DID its job — it navigated, taking its own execution
         // context down with it. Treat as success and settle the new page.
         res.status = 'ok';

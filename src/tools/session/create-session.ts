@@ -25,6 +25,9 @@ import { markSharedWithUser } from '../../focus-guard.js';
 import { findFreePort } from '../../free-port.js';
 import {
   resolveCdpEndpoint,
+  normalizeCdpEndpoint,
+  assertAllowedCdpHost,
+  CONTROL_REVOKED_PREFIX,
   explainAttachError,
   profileDirForPort,
   openProfileNames,
@@ -35,6 +38,7 @@ import {
   getRelay,
   getUserBrowser,
   acquireUserBrowser,
+  releaseUserBrowser,
 } from '../../cdp-connection.js';
 import { countProfiles } from '../../user-profiles.js';
 import { watchUserActivity } from '../../user-activity.js';
@@ -86,6 +90,11 @@ export interface WebSessionOptions {
   storageState?: Awaited<ReturnType<BrowserContext['storageState']>>;
   /** Called if attaching to the user's Chrome is slow, most likely waiting on its Allow prompt. */
   onWaiting?: (message: string) => void;
+  /**
+   * Chrome to attach to for this session, overriding APPIUM_MCP_CDP_ENDPOINT.
+   * When given, a failed attach always throws.
+   */
+  cdpEndpoint?: string;
 }
 
 // Define capabilities type
@@ -342,15 +351,24 @@ export async function openWebSession(opts: WebSessionOptions) {
   // ai-colleague with --remote-debugging-port) instead of spawning
   // a fresh browser. New tabs/pages opened by the AI then appear
   // in the user's already-open Chromium window.
-  const cdpEndpoint = process.env.APPIUM_MCP_CDP_ENDPOINT;
+  // A per-session cdpEndpoint (one shared backend serving several panes,
+  // each with its own browser) wins over the env default.
+  const explicitEndpoint = opts.cdpEndpoint?.trim()
+    ? normalizeCdpEndpoint(opts.cdpEndpoint)
+    : undefined;
+  if (explicitEndpoint) {
+    assertAllowedCdpHost(explicitEndpoint);
+  }
+  const cdpEndpoint = explicitEndpoint ?? process.env.APPIUM_MCP_CDP_ENDPOINT;
   // Hard-fail mode (shared-display deployments, e.g. herdr-share):
   // when APPIUM_MCP_CDP_REQUIRED is set, a failed attach MUST throw
   // instead of silently falling back to a detached launch — a
   // fallback browser is invisible to whoever is watching the
   // shared display, which is exactly the failure this prevents.
-  const cdpRequired = /^(1|true|yes)$/i.test(
-    (process.env.APPIUM_MCP_CDP_REQUIRED ?? '').trim()
-  );
+  // A caller that named its browser never wants a detached one instead.
+  const cdpRequired =
+    !!explicitEndpoint ||
+    /^(1|true|yes)$/i.test((process.env.APPIUM_MCP_CDP_REQUIRED ?? '').trim());
   if (cdpRequired && !cdpEndpoint) {
     throw new Error(
       'APPIUM_MCP_CDP_REQUIRED is set but APPIUM_MCP_CDP_ENDPOINT is not — refusing to launch a detached browser.'
@@ -371,6 +389,8 @@ export async function openWebSession(opts: WebSessionOptions) {
   let attachError: string | undefined;
   // What we attached to, for the session response.
   let attachedInfo: string | undefined;
+  // The attached Chrome's WebSocket URL: its key in cdp-connection.ts.
+  let upstreamUrl: string | undefined;
 
   if (cdpEndpoint && browserType === 'chromium') {
     log.info(`Attaching to existing Chromium via CDP at ${cdpEndpoint}`);
@@ -380,8 +400,9 @@ export async function openWebSession(opts: WebSessionOptions) {
       // Chrome's remote-debugging toggle asks the user to approve each new
       // connection, so Squire holds one and all sessions share it
       // (cdp-connection.ts, cdp-proxy.ts).
+      const upstream = await toBrowserWebSocketUrl(wsOrHttp);
       const { relay, fresh } = await getRelay(
-        await toBrowserWebSocketUrl(wsOrHttp),
+        upstream,
         CDP_CONNECT_TIMEOUT_MS,
         () =>
           opts.onWaiting?.(
@@ -403,7 +424,8 @@ export async function openWebSession(opts: WebSessionOptions) {
         );
       }
       const reused = !fresh;
-      acquireUserBrowser();
+      acquireUserBrowser(upstream);
+      upstreamUrl = upstream;
       const contexts = b.contexts();
       // viewport:null and no userAgent override — the user's real
       // Chrome already sends a correct, self-consistent UA + client
@@ -474,9 +496,14 @@ export async function openWebSession(opts: WebSessionOptions) {
         wsOrHttp,
         CDP_CONNECT_TIMEOUT_MS
       );
+      if (reason.startsWith(CONTROL_REVOKED_PREFIX)) {
+        // The user took the browser back. A detached browser instead would
+        // be just as wrong as a retry.
+        throw new Error(reason);
+      }
       if (cdpRequired) {
         throw new Error(
-          `CDP attach to ${cdpEndpoint} failed (${reason}) and APPIUM_MCP_CDP_REQUIRED is set — NOT falling back to a detached launch.`
+          `CDP attach to ${cdpEndpoint} failed (${reason}) and ${explicitEndpoint ? 'cdpEndpoint was given' : 'APPIUM_MCP_CDP_REQUIRED is set'} — NOT falling back to a detached launch.`
         );
       }
       attachError = reason;
@@ -490,7 +517,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     if (cdpEndpoint && browserType !== 'chromium') {
       if (cdpRequired) {
         throw new Error(
-          `APPIUM_MCP_CDP_REQUIRED is set but browserType=${browserType}; CDP attach only supports chromium.`
+          `${explicitEndpoint ? 'cdpEndpoint was given' : 'APPIUM_MCP_CDP_REQUIRED is set'} but browserType=${browserType}; CDP attach only supports chromium.`
         );
       }
       log.warn(
@@ -623,6 +650,9 @@ export async function openWebSession(opts: WebSessionOptions) {
       await (attachedToUserBrowser ? page.close() : browser.close()).catch(
         () => {}
       );
+      if (upstreamUrl) {
+        releaseUserBrowser(upstreamUrl);
+      }
       throw e;
     }
   }
@@ -653,11 +683,22 @@ export async function openWebSession(opts: WebSessionOptions) {
   // Intentional teardown (delete_session) sets isDeletingSession
   // first, so dropDisconnectedSession no-ops there.
   const onDisconnected = () => {
-    dropDisconnectedSession(sessionId, 'attached browser closed');
+    dropDisconnectedSession(
+      sessionId,
+      'attached browser closed or its connection was cut (on a shared pane the user may have taken control: ask before reconnecting)'
+    );
   };
   browser.on('disconnected', onDisconnected);
   // The attached browser outlives the session, so don't leave the listener behind.
-  pwDriver.onDelete = () => browser.off('disconnected', onDisconnected);
+  // Other sessions may share an attached browser's connection, and a new
+  // one makes Chrome ask for Allow again, so release it rather than close
+  // it; cdp-connection.ts closes it once nobody has used it for a while.
+  pwDriver.onDelete = () => {
+    browser.off('disconnected', onDisconnected);
+    if (upstreamUrl) {
+      releaseUserBrowser(upstreamUrl);
+    }
+  };
 
   log.info(`WEB session created successfully with ID: ${sessionId}`);
 
@@ -740,6 +781,12 @@ export default function createSession(server: any): void {
         .describe(
           'For web platform only: Initial URL to navigate to after launching the browser.'
         ),
+      cdpEndpoint: z
+        .string()
+        .optional()
+        .describe(
+          "For web platform only: the Chrome to attach to for this session, as http://host:port, host:port or a ws://…/devtools/browser/… URL. Overrides APPIUM_MCP_CDP_ENDPOINT. If the attach fails the call fails; it never opens a separate browser instead. Loopback hosts only unless the server's APPIUM_MCP_CDP_ALLOWED_HOSTS allows more."
+        ),
       viewport: z
         .object({
           width: z.number().int().min(1).describe('Viewport width in pixels'),
@@ -779,6 +826,7 @@ export default function createSession(server: any): void {
             headless: args.headless,
             url: args.url,
             viewport: args.viewport,
+            cdpEndpoint: args.cdpEndpoint,
             onWaiting: (m) => _context?.log?.info?.(m),
           });
 
@@ -800,7 +848,8 @@ export default function createSession(server: any): void {
           // active (ai-colleague case).
           if (
             process.env.APPIUM_MCP_NO_UI ||
-            process.env.APPIUM_MCP_CDP_ENDPOINT
+            process.env.APPIUM_MCP_CDP_ENDPOINT ||
+            args.cdpEndpoint
           ) {
             return textResponse;
           }

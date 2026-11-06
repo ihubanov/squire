@@ -66,6 +66,9 @@ export async function toBrowserWebSocketUrl(endpoint: string): Promise<string> {
   const res = await fetch(new URL('/json/version', endpoint), {
     signal: AbortSignal.timeout(5000),
   });
+  if (res.status === 401 || res.status === 403) {
+    throw new Error(`Unexpected server response: ${res.status}`);
+  }
   const { webSocketDebuggerUrl } = (await res.json()) as {
     webSocketDebuggerUrl?: string;
   };
@@ -89,6 +92,69 @@ async function hasDiscovery(endpoint: string): Promise<boolean> {
   }
 }
 
+/** `host:port` without a scheme (as herdr hands it out) means http. */
+export function normalizeCdpEndpoint(endpoint: string): string {
+  const e = endpoint.trim();
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(e) ? e : `http://${e}`;
+}
+
+const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)$/i;
+
+/**
+ * A cdpEndpoint passed to create_session comes from the caller, and on a
+ * shared backend anyone who can reach it is a caller, so only loopback
+ * hosts are accepted unless APPIUM_MCP_CDP_ALLOWED_HOSTS (comma-separated
+ * host or host:port, or `*`) allows more. The env endpoint is trusted.
+ */
+export function assertAllowedCdpHost(endpoint: string): void {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    throw new Error(
+      `cdpEndpoint "${endpoint}" is not a valid URL or host:port`
+    );
+  }
+  if (!/^(https?|wss?):$/.test(url.protocol)) {
+    throw new Error(
+      `cdpEndpoint "${endpoint}" must be http(s):// or ws(s)://, or host:port`
+    );
+  }
+  const host = url.hostname;
+  if (LOOPBACK.test(host)) {
+    return;
+  }
+  const allowed = (process.env.APPIUM_MCP_CDP_ALLOWED_HOSTS ?? '')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  const hostPort = `${host}:${url.port}`.toLowerCase();
+  if (
+    allowed.includes('*') ||
+    allowed.includes(host.toLowerCase()) ||
+    allowed.includes(hostPort)
+  ) {
+    return;
+  }
+  throw new Error(
+    `cdpEndpoint host "${host}" is not allowed: only loopback hosts are, unless APPIUM_MCP_CDP_ALLOWED_HOSTS lists it`
+  );
+}
+
+/**
+ * Start of the error when the endpoint refuses with 403, as a herdr pane's
+ * input-lock gate does once the user takes control. Squire never retries
+ * it: retrying would fight the user for the screen.
+ */
+export const CONTROL_REVOKED_PREFIX = 'Control revoked:';
+
+export function isControlRevoked(err: Error): boolean {
+  return (
+    err.message.startsWith(CONTROL_REVOKED_PREFIX) ||
+    /Unexpected server response: 40[13]\b/.test(err.message)
+  );
+}
+
 /** Prefix for an attach that got past Allow but failed afterwards. */
 export const ACCEPTED_PREFIX = 'Chrome accepted the connection, but';
 
@@ -103,6 +169,9 @@ export function explainAttachError(
   timeoutMs: number
 ): string {
   const msg = err.message;
+  if (isControlRevoked(err)) {
+    return `${CONTROL_REVOKED_PREFIX} ${endpoint} refused the connection (403), so the user has taken control of this browser. Stop and ask the user in chat before trying again; do not retry on your own.`;
+  }
   if (msg.startsWith(ACCEPTED_PREFIX)) {
     return msg.split('\n')[0];
   }

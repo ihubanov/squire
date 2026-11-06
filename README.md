@@ -33,7 +33,7 @@ This installs the web-driving and presenting skills, the `browser-driver` and `p
 ```bash
 npx @sniffski/squire          # stdio MCP server
 ```
-Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222`, or turn on "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`, and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`. The toggle has no `/json` discovery, so Squire reads the browser's WebSocket URL from `DevToolsActivePort` in the Chrome profile directory, and Chrome asks you to click Allow when Squire connects. Squire holds that one connection and every session shares it, so you are asked once; it closes the connection after 10 minutes with no session (`APPIUM_MCP_CDP_IDLE_MS`). With several Chrome profiles open, tabs are listed by profile and new tabs open in the profile of the tab Squire is working in.
+Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222`, or turn on "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`, and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`. The toggle has no `/json` discovery, so Squire reads the browser's WebSocket URL from `DevToolsActivePort` in the Chrome profile directory, and Chrome asks you to click Allow when Squire connects. Squire holds that one connection and every session shares it, so you are asked once; it closes the connection after 10 minutes with no session (`APPIUM_MCP_CDP_IDLE_MS`). With several Chrome profiles open, tabs are listed by profile and new tabs open in the profile of the tab Squire is working in. One backend can serve several browsers: pass `cdpEndpoint` (`http://host:port`, `host:port` or a `ws://` URL) to `create_session` to attach that session to its own Chrome, overriding the env var. Each browser gets its own shared connection. If that attach fails the call fails instead of opening a separate browser, and a 403 from the endpoint (a pane whose user has taken control) is reported as "Control revoked" and never retried.
 
 ## Quick start
 
@@ -50,6 +50,7 @@ To have Squire work in your own Chrome, turn on remote debugging at `chrome://in
 | Var | Purpose |
 |-----|---------|
 | `APPIUM_MCP_CDP_ENDPOINT` | Attach to a running Chrome (e.g. `http://localhost:9222`). Unset → launches its own detached browser. |
+| `APPIUM_MCP_CDP_ALLOWED_HOSTS` | Hosts a caller may name in `create_session`'s `cdpEndpoint` besides loopback (comma-separated `host` or `host:port`, `*` = any). Default: loopback only. |
 | `APPIUM_MCP_CDP_IDLE_MS` | How long to keep the connection to the user's Chrome after the last session ends (default 600000 = 10 min). Each new connection is a new Allow prompt. |
 | `APPIUM_MCP_CDP_KEEP_CONNECTION` | `0` → disconnect from the user's Chrome as soon as the last session ends. |
 | `APPIUM_MCP_CDP_TRACE` | File to log CDP method names to, for debugging an attach. |
