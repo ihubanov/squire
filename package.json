@@ -1,7 +1,7 @@
 {
   "name": "@sniffski/squire",
   "mcpName": "io.github.ihubanov/squire",
-  "version": "1.32.1",
+  "version": "1.32.2",
   "type": "module",
   "repository": {
     "type": "git",
