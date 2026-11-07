@@ -28,18 +28,18 @@ export default function captcha(server: FastMCP): void {
       .string()
       .optional()
       .describe(
-        'CSS selector of the knob to grab, e.g. ".roulette-handle". Its current bearing gives the start angle and its box centre the press point. Omit it when the knob is not an element (a range-input thumb, a canvas sprite) and let angleScript return startAngle/radius/grab instead. Its box alone is wrong for a range thumb: that box spans the whole track.'
+        'CSS selector of the knob to grab, e.g. ".roulette-handle". Its current bearing gives the start angle and its box centre the press point. Omit it when the knob is not an element (a range-input thumb, a canvas sprite) and let angleScript return startAngle/radius/grab instead. Its box alone is wrong for a range thumb: that box spans the whole track. Also drop it when a cursor-hotspot knob on screen has no computable cursor — a `<input type=range>` thumb with `cursor: auto` reports nothing, so derive the grab from the control value instead.'
       ),
     angleScript: z
       .string()
       .describe(
-        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element. Keep any search-window state in a window variable so it shrinks as attempts go on.'
+        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element, and derive the grab from live state every call (a range input value mapped along its track) — the script is re-run when a drag has to be repeated, so a stale constant grab would press the wrong place. Keep any search-window state in a window variable so it shrinks as attempts go on.'
       ),
     successScript: z
       .string()
       .optional()
       .describe(
-        'JS run in the main frame after each attempt; truthy when the captcha passed. Prefer the token field ("the hidden response field now has a value") over the picture. Optional when judgeScript is given, but keep it when one exists — it is the reliable half of the verdict.'
+        'JS run in the main frame after each attempt; truthy when the captcha passed. Prefer the token field ("the hidden response field now has a value") over the picture. Optional when judgeScript is given, but keep it when one exists — it is the reliable half of the verdict. Test a value that only exists after success (a now-revealed number or token), not a wrapper\'s innerText: dialogs keep their static strings ("the code expired") in that text at all times, so it never distinguishes a pass.'
       ),
     judgeScript: z
       .string()
@@ -117,7 +117,22 @@ export default function captcha(server: FastMCP): void {
       .min(5_000)
       .optional()
       .describe(
-        'Challenges that expire (a signed image URL, roughly a minute) get replaced when the current one is older than this: the refresh control is clicked and the clock resets. Default 55000.'
+        'Challenges that expire (a signed image URL, roughly a minute) get replaced when the current one is older than this: the refresh control is clicked and the clock resets. Default 55000. Cards that hand out a stable per-session token are safe to keep much longer (20 s is comfortable); a per-image URL is the case that needs a short value.'
+      ),
+    settleScript: z
+      .string()
+      .optional()
+      .describe(
+        'JS run in the widget frame, polled until truthy: the widget has finished moving and has accepted the drag. Use it wherever a load animation can overwrite a value set mid-flight, or the widget records a "user moved it" flag that submit refuses without. Polled after a refresh and after every drag; a drag that never settles is repeated (twice) before the attempt is judged, and counts as a miss unless successScript passes. Keep the check on live state (control value equals the target AND the widget\'s own touched flag), with the target stashed by angleScript in a window variable.'
+      ),
+    settleTimeoutMs: z
+      .number()
+      .int()
+      .min(200)
+      .max(10_000)
+      .optional()
+      .describe(
+        'How long settleScript may stay falsy before a drag counts as unrecorded (default 2500).'
       ),
   });
 
@@ -150,6 +165,7 @@ export default function captcha(server: FastMCP): void {
       const passScore = args.passScore ?? 0.9;
       const maxMs = args.maxMs ?? 90_000;
       const maxAge = args.maxAgeMs ?? 55_000;
+      const settleTimeout = args.settleTimeoutMs ?? 2500;
       const frame =
         args.frame === undefined
           ? driver.page.mainFrame()
@@ -273,6 +289,28 @@ export default function captcha(server: FastMCP): void {
         };
       };
 
+      /**
+       * Polls settleScript until the widget is quiet. Without a
+       * settleScript there is nothing to wait for, so this is true at once.
+       */
+      const waitSettled = async (capMs = settleTimeout): Promise<boolean> => {
+        if (!args.settleScript) {
+          return true;
+        }
+        const deadline = Date.now() + capMs;
+        while (Date.now() < deadline) {
+          try {
+            if (await frame.evaluate(args.settleScript)) {
+              return true;
+            }
+          } catch {
+            // The widget is mid-swap and its nodes are gone for a moment.
+          }
+          await sleep(120);
+        }
+        return false;
+      };
+
       const clickIfPresent = async (
         selector: string | undefined,
         why: string
@@ -317,97 +355,147 @@ export default function captcha(server: FastMCP): void {
             break;
           }
 
-          const out = await frame.evaluate(args.angleScript);
-          const next = (
-            typeof out === 'number' ? { angle: out } : (out ?? {})
-          ) as {
-            angle?: number;
-            direction?: string;
-            startAngle?: number;
-            radius?: number;
-            grab?: { x?: number; y?: number };
-          };
-          if (!next || typeof next.angle !== 'number') {
-            log.push(
-              `angleScript returned ${JSON.stringify(out)} — no angle to try`
-            );
-            break;
-          }
-
           const cx = dialBox.x + dialBox.width / 2;
           const cy = dialBox.y + dialBox.height / 2;
-
-          // The angleScript may describe the knob itself, because a knob is
-          // not always an element (a range-input thumb has no box of its own —
-          // the input's box spans the whole track). Anything it gives wins;
-          // a handle element only fills in what is left.
-          let startAngle =
-            typeof next.startAngle === 'number' ? next.startAngle : undefined;
-          let radius =
-            typeof next.radius === 'number' ? next.radius : undefined;
-          let grab: { x: number; y: number } | undefined =
-            next.grab &&
-            typeof next.grab.x === 'number' &&
-            typeof next.grab.y === 'number'
-              ? // Offsets are relative to the dial box, so the frame's own
-                // offset and the page scroll both stay out of the caller's way.
-                { x: dialBox.x + next.grab.x, y: dialBox.y + next.grab.y }
-              : undefined;
           const bearing = (p: { x: number; y: number }) =>
             (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI;
-          if (grab && startAngle === undefined) {
-            startAngle = bearing(grab);
-          }
           let handleBox:
             | { x: number; y: number; width: number; height: number }
             | undefined;
-          if (!grab && args.handle) {
-            handleBox = await box(args.handle);
-            grab = {
-              x: handleBox.x + handleBox.width / 2,
-              y: handleBox.y + handleBox.height / 2,
+
+          /**
+           * Asks for the next angle, works out the knob geometry and drags.
+           * Run again when a drag did not settle: the knob has moved by then,
+           * so the grab has to come from fresh state rather than the first
+           * calculation.
+           */
+          const aimAndDrag = async () => {
+            const out = await frame.evaluate(args.angleScript);
+            const next = (
+              typeof out === 'number' ? { angle: out } : (out ?? {})
+            ) as {
+              angle?: number;
+              direction?: string;
+              startAngle?: number;
+              radius?: number;
+              grab?: { x?: number; y?: number };
             };
-            radius ??= Math.hypot(grab.x - cx, grab.y - cy) || 40;
-            startAngle ??= bearing(grab);
-          }
-          startAngle ??= 0;
-          // No knob geometry at all: grab the rim, which is right for a dial
-          // whose rim is the control.
-          radius ??= Math.min(dialBox.width, dialBox.height) * 0.375;
+            if (!next || typeof next.angle !== 'number') {
+              log.push(
+                `angleScript returned ${JSON.stringify(out)} — no angle to try`
+              );
+              return undefined;
+            }
 
-          let delta = next.angle - startAngle;
-          if (next.direction === 'cw') {
-            while (delta <= 0) {
-              delta += 360;
+            // The angleScript may describe the knob itself, because a knob is
+            // not always an element (a range-input thumb has no box of its own —
+            // the input's box spans the whole track). Anything it gives wins;
+            // a handle element only fills in what is left.
+            let startAngle =
+              typeof next.startAngle === 'number' ? next.startAngle : undefined;
+            let radius =
+              typeof next.radius === 'number' ? next.radius : undefined;
+            let grab: { x: number; y: number } | undefined =
+              next.grab &&
+              typeof next.grab.x === 'number' &&
+              typeof next.grab.y === 'number'
+                ? // Offsets are relative to the dial box, so the frame's own
+                  // offset and the page scroll both stay out of the caller's
+                  // way.
+                  { x: dialBox.x + next.grab.x, y: dialBox.y + next.grab.y }
+                : undefined;
+            if (grab && startAngle === undefined) {
+              startAngle = bearing(grab);
             }
-          } else if (next.direction === 'ccw') {
-            while (delta >= 0) {
-              delta -= 360;
+            if (!grab && args.handle) {
+              handleBox = await box(args.handle);
+              grab = {
+                x: handleBox.x + handleBox.width / 2,
+                y: handleBox.y + handleBox.height / 2,
+              };
+              radius ??= Math.hypot(grab.x - cx, grab.y - cy) || 40;
+              startAngle ??= bearing(grab);
             }
-          } else {
-            while (delta > 180) {
-              delta -= 360;
-            }
-            while (delta <= -180) {
-              delta += 360;
-            }
-          }
-          // A single jump registers on almost nothing: never fewer than 40
-          // intermediate bearings, and more when the turn is wide.
-          const steps = Math.max(40, Math.min(180, Math.ceil(Math.abs(delta))));
+            startAngle ??= 0;
+            // No knob geometry at all: grab the rim, which is right for a dial
+            // whose rim is the control.
+            radius ??= Math.min(dialBox.width, dialBox.height) * 0.375;
 
-          await arcDrag(driver.page, {
-            cx,
-            cy,
-            radius,
-            startAngle,
-            delta,
-            steps,
-            delay: 12,
-            hold: 80,
-            grab,
-          });
-          await sleep(settle);
+            let delta = next.angle - startAngle;
+            if (next.direction === 'cw') {
+              while (delta <= 0) {
+                delta += 360;
+              }
+            } else if (next.direction === 'ccw') {
+              while (delta >= 0) {
+                delta -= 360;
+              }
+            } else {
+              while (delta > 180) {
+                delta -= 360;
+              }
+              while (delta <= -180) {
+                delta += 360;
+              }
+            }
+            // A single jump registers on almost nothing: never fewer than 40
+            // intermediate bearings, and more when the turn is wide.
+            const steps = Math.max(
+              40,
+              Math.min(180, Math.ceil(Math.abs(delta)))
+            );
+
+            // A widget that was just reloaded or re-shown animates into
+            // place, and setting a value before it finishes is how the drag
+            // gets silently discarded. Held after the angleScript so a state
+            // check can compare against the target it just stashed, and
+            // capped short: a "has the user moved it" flag is false until
+            // the drag lands, so waiting the full timeout here is wasted.
+            if (!(await waitSettled(Math.min(settleTimeout, 800)))) {
+              log.push(
+                `attempt ${attempt}: dial never settled before the press — dragging anyway`
+              );
+            }
+
+            await arcDrag(driver.page, {
+              cx,
+              cy,
+              radius,
+              startAngle,
+              delta,
+              steps,
+              delay: 12,
+              hold: 80,
+              grab,
+            });
+            await sleep(settle);
+            return { angle: next.angle, startAngle, steps };
+          };
+
+          let moved = await aimAndDrag();
+          if (!moved) {
+            break;
+          }
+          // The widget may still be animating, or refuse to record a value set
+          // mid-flight. Repeat the drag until it takes (twice at most); the
+          // second call re-reads the knob position from live state.
+          let settled = await waitSettled();
+          for (let retry = 0; retry < 2 && !settled; retry++) {
+            log.push(
+              `attempt ${attempt}: drag not recorded yet — repeating (${retry + 1}/2)`
+            );
+            const again = await aimAndDrag();
+            if (!again) {
+              break;
+            }
+            moved = again;
+            settled = await waitSettled();
+          }
+          if (!settled) {
+            log.push(
+              'dial never settled — the widget may have discarded the drag'
+            );
+          }
 
           const captureBox = args.capture ? await box(args.capture) : dialBox;
           await sleep(hold);
@@ -415,16 +503,18 @@ export default function captcha(server: FastMCP): void {
             captureBox,
             dialBox,
             handleBox,
-            next.angle,
+            moved.angle,
             attempt
           );
           const token = await tokenPassed();
           // The token is authoritative when it exists; a picture score that
-          // disagrees is worth reporting, not obeying.
-          const ok = token === undefined ? verdict.ok : token;
+          // disagrees is worth reporting, not obeying. An unsettled dial
+          // cannot count as a pass on the picture alone: the crop can look
+          // right while the widget never accepted the value.
+          const ok = token === undefined ? verdict.ok && settled : token;
           lastOk = ok;
           log.push(
-            `attempt ${attempt}: ${startAngle.toFixed(0)}° → ${next.angle.toFixed(0)}° (${steps} moves) — ` +
+            `attempt ${attempt}: ${moved.startAngle.toFixed(0)}° → ${moved.angle.toFixed(0)}° (${moved.steps} moves) — ` +
               (verdict.note ? `${verdict.note}, ` : '') +
               (token === undefined
                 ? ok

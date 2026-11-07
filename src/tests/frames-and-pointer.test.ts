@@ -119,6 +119,44 @@ const THUMB_DIAL = `
  })();
 </script>`;
 
+/**
+ * Same dial, but it behaves like one that is still animating: the first
+ * release is thrown away — the thumb snaps back to its start bearing and the
+ * "user moved it" flag stays down. The widget only accepts a value once it is
+ * settled, so a solver that presses submit mid-flight loses the attempt and one
+ * that re-reads the knob position recovers.
+ */
+const CLOBBER_DIAL = THUMB_DIAL.replace(
+  'let dragging = false, last = START, downAt = null, moves = 0;',
+  `let dragging = false, last = START, downAt = null, moves = 0, drags = 0;
+  window.__armed = false;`
+)
+  .replace(
+    `  document.addEventListener('mousedown', (e) => {
+    dragging = true; moves = 0; downAt = { x: e.clientX, y: e.clientY };
+  });`,
+    `  document.addEventListener('mousedown', (e) => {
+    dragging = true; moves = 0; downAt = { x: e.clientX, y: e.clientY };
+    window.__armed = false;
+  });`
+  )
+  .replace(
+    `  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; window.__result = { angle: last, moves, downAt }; }
+  });`,
+    `  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false; drags++;
+    if (drags === 1) {
+      // Mid-animation: the value is clobbered and the flag stays down.
+      last = START; place(START);
+    } else {
+      window.__armed = true;
+    }
+    window.__result = { angle: last, moves, downAt, drags };
+  });`
+  );
+
 let browser: Browser;
 let driver: InstanceType<typeof PlaywrightDriver>;
 let page: Page;
@@ -352,6 +390,64 @@ describe('playwright_captcha_solve', () => {
       Math.hypot(out.downAt.x - thumb.x, out.downAt.y - thumb.y)
     ).toBeLessThan(3);
     expect(Math.abs(out.angle - 150)).toBeLessThan(5);
+  }, 30_000);
+
+  test('the clobber fixture really clobbers', () => {
+    // The fixture is built by string replacement; a silent miss would leave a
+    // well-behaved dial and the repeat test below would prove nothing.
+    expect(CLOBBER_DIAL).not.toBe(THUMB_DIAL);
+    expect(CLOBBER_DIAL).toContain('drags === 1');
+    expect(CLOBBER_DIAL).toContain('window.__armed = true');
+  });
+
+  test('repeats a drag the widget discarded until it settles', async () => {
+    await page.setContent(CLOBBER_DIAL);
+    // The script reads the thumb from live state on every call, as a
+    // range-thumb solver must: the first drag is thrown back to 30°, and a
+    // constant grab would press empty space on the repeat.
+    const angleScript = `(() => {
+      const d = document.getElementById('dial').getBoundingClientRect();
+      const t = document.getElementById('thumb').getBoundingClientRect();
+      return {
+        angle: 60,
+        grab: { x: t.left + t.width / 2 - d.left, y: t.top + t.height / 2 - d.top },
+      };
+    })()`;
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      angleScript,
+      settleScript: '(() => window.__armed === true)()',
+      successScript: '(() => window.__armed === true)()',
+      settleTimeoutMs: 400,
+      settleMs: 100,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/drag not recorded yet — repeating \(1\/2\)/);
+    expect(text).toMatch(/^Solved in \d+s/);
+
+    const out = await page.evaluate(() => (window as any).__result);
+    expect(out.drags).toBe(2);
+    expect(Math.abs(out.angle - 60)).toBeLessThan(5);
+  }, 30_000);
+
+  test('an unsettled dial is a miss even when the picture looks right', async () => {
+    await page.setContent(DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => 200)()',
+      // A judge that is happy with the geometry but the widget never arms.
+      judgeScript: '((arg) => ({ ok: true, note: "angle " + arg.angle }))',
+      settleScript: '(() => false)()',
+      settleTimeoutMs: 250,
+      settleMs: 100,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Not solved/);
+    expect(text).toMatch(/never settled/);
+    expect(text).not.toContain('PASSED');
   }, 30_000);
 
   test('without either verdict script it refuses', async () => {
