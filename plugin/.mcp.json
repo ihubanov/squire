@@ -2,7 +2,7 @@
   "mcpServers": {
     "squire": {
       "command": "npx",
-      "args": ["-y", "@sniffski/squire@1.33.0"],
+      "args": ["-y", "@sniffski/squire@1.33.1"],
       "env": {
         "NODE_ENV": "production",
         "APPIUM_MCP_RESPECT_USER_FOCUS": "false",
