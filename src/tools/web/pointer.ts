@@ -26,7 +26,7 @@ export default function pointer(server: FastMCP): void {
   server.addTool({
     name: 'playwright_element_box',
     description:
-      'Report an element’s position and size on screen (viewport pixels): {x, y, width, height}. Use the centre for circular controls and with playwright_drag_arc. Fails if the element is off-screen or hidden.',
+      'Report an element’s position and size: {x, y, width, height} in viewport pixels (what playwright_drag_arc and the mouse take), plus the same box in page pixels with the scroll offset (what screenshots and clips take). Use the centre for circular controls. Fails if the element is off-screen or hidden.',
     parameters: boxSchema,
     annotations: { readOnlyHint: true, openWorldHint: false },
     execute: async (
@@ -52,11 +52,37 @@ export default function pointer(server: FastMCP): void {
           x: box.x + box.width / 2,
           y: box.y + box.height / 2,
         };
+        // The mouse uses viewport coordinates, screenshots use page ones. The
+        // caller cannot see the scroll offset, so report both rather than
+        // leave it to guess.
+        const scroll = await driver.page
+          .mainFrame()
+          .evaluate(() => ({ x: window.scrollX, y: window.scrollY }));
+        const page = {
+          x: box.x + scroll.x,
+          y: box.y + scroll.y,
+          width: box.width,
+          height: box.height,
+        };
+        let frameBox: { x: number; y: number } | undefined;
+        // ownerFrame() is async in Playwright 1.65+.
+        const owner = await el.ownerFrame();
+        if (owner && owner !== driver.page.mainFrame()) {
+          const fe = await owner.frameElement();
+          const fb = await fe.boundingBox();
+          if (fb) {
+            frameBox = { x: fb.x + scroll.x, y: fb.y + scroll.y };
+          }
+        }
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({ ...box, centre }, null, 2),
+              text: JSON.stringify(
+                { ...box, centre, page, scroll, frame: frameBox },
+                null,
+                2
+              ),
             },
           ],
         };

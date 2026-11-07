@@ -167,6 +167,27 @@ describe('playwright_element_box', () => {
     const box = JSON.parse(res.content[0].text);
     expect(box.x).toBeCloseTo(440, 0);
     expect(box.centre.x).toBeCloseTo(450, 0);
+    expect(box.frame).toBeUndefined();
+  }, 15_000);
+
+  test('an element inside a frame also reports the frame offset', async () => {
+    // A cross-origin widget (card iframe, embedded dial) needs its frame's
+    // position, since viewport coordinates alone say nothing about where the
+    // frame sits when the caller wants to clip a screenshot of it.
+    await page.setContent(
+      '<iframe id="f" style="position:absolute;left:100px;top:50px;width:300px;height:200px;border:0"' +
+        ' srcdoc="<div id=inner style=&quot;position:absolute;left:20px;top:10px;width:20px;height:20px&quot;></div>"></iframe>'
+    );
+    const frame = await (await page.waitForSelector('#f')).contentFrame();
+    const inner = await frame!.waitForSelector('#inner');
+    const res = await execs.playwright_element_box({
+      elementUUID: driver.registerElement(inner),
+    });
+    const box = JSON.parse(res.content[0].text);
+    expect(box.frame).toEqual({ x: 100, y: 50 });
+    // The element box itself is already in page coordinates.
+    expect(box.x).toBeCloseTo(120, 0);
+    expect(box.y).toBeCloseTo(60, 0);
   }, 15_000);
 });
 
@@ -205,6 +226,41 @@ describe('playwright_captcha_solve', () => {
     expect(text).toMatch(/attempt 1: -?\d+° → 200°/);
     expect(text).toContain('PASSED');
   }, 30_000);
+
+  test('judgeScript gets a screenshot of the capture region and decides', async () => {
+    await page.setContent(DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => 200)()',
+      // The judge sees real pixels (a PNG data URL) and the geometry, and
+      // passes only when the drag reached the angle.
+      judgeScript: `((arg) => ({
+        ok: arg.image.startsWith('data:image/png;base64,') &&
+            arg.width > 200 && arg.height > 200 &&
+            Math.abs(arg.angle - 200) < 6,
+        note: 'capture ' + arg.width + 'x' + arg.height,
+      }))`,
+      holdMs: 100,
+      settleMs: 150,
+      maxAttempts: 2,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Solved in \d+s/);
+    expect(text).toContain('PASSED');
+    expect(text).toMatch(/capture \d+x\d+/);
+  }, 30_000);
+
+  test('without either verdict script it refuses', async () => {
+    await page.setContent(DIAL);
+    await expect(
+      execs.playwright_captcha_solve({
+        dial: '#dial',
+        handle: '#handle',
+        angleScript: '(() => 90)()',
+      })
+    ).rejects.toThrow(/no verdict/);
+  }, 15_000);
 
   test('says what is missing when a selector matches nothing', async () => {
     await page.setContent(DIAL);
