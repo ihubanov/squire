@@ -14,10 +14,7 @@
  */
 import type { FastMCP } from 'fastmcp';
 import log from '../logger.js';
-import {
-  explainMissingSession,
-  touchActiveSession,
-} from '../session-store.js';
+import { explainMissingSession, touchActiveSession } from '../session-store.js';
 import {
   beginAction,
   endAction,
