@@ -77,6 +77,23 @@ const DIAL = `
 </script>`;
 
 /**
+ * The same dial with a refresh control and a click counter. Lets a test make
+ * the first fit bad and later ones good, the way an adversarial puzzle does,
+ * and then prove the bad fit was never dragged.
+ */
+const GATED_DIAL = DIAL.replace(
+  '<div id="dial"></div><div id="handle"></div>',
+  '<div id="dial"></div><div id="handle"></div>' +
+    '<button id="refresh" style="position:absolute;left:10px;top:10px">r</button>'
+).replace(
+  '</script>',
+  `  document.getElementById('refresh').addEventListener('click', () => {
+    window.__refreshes = (window.__refreshes || 0) + 1;
+  });
+</script>`
+);
+
+/**
  * A dial whose knob is not an element — the thumb of a range input, a canvas
  * sprite. The caller can only aim it by bearing, so the geometry has to come
  * from the angleScript. Starts at 30° on a 120px radius.
@@ -507,6 +524,46 @@ describe('playwright_captcha_solve', () => {
     const text = res.content[0].text as string;
     expect(text).toMatch(/^Not solved/);
     expect(text).toContain('suspect the grab');
+  }, 30_000);
+
+  test('a low-confidence fit buys a new picture instead of a drag', async () => {
+    await load(GATED_DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      // Adversarial fit: coin toss until the picture has been refreshed.
+      angleScript:
+        '(() => ({ angle: 200, confidence: window.__refreshes ? 0.9 : 0.2 }))()',
+      successScript:
+        '(() => { const r = window.__result; return !!r && Math.abs(r.angle - 200) < 6; })()',
+      refresh: '#refresh',
+      minAngleConfidence: 0.5,
+      settleMs: 100,
+      maxAttempts: 3,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toContain('refreshed instead of dragging');
+    expect(text).toMatch(/^Solved in \d+s/);
+    // Only the good fit was dragged.
+    expect(await page.evaluate(() => (window as any).__refreshes)).toBe(1);
+  }, 30_000);
+
+  test('without a refresh control a weak fit is dragged and logged', async () => {
+    await load(DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => ({ angle: 200, confidence: 0.1 }))()',
+      successScript:
+        '(() => { const r = window.__result; return !!r && Math.abs(r.angle - 200) < 6; })()',
+      minAngleConfidence: 0.5,
+      settleMs: 100,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toContain('angle fit confidence 0.10');
+    expect(text).toContain('no refresh control — dragging anyway');
+    expect(text).toMatch(/^Solved in \d+s/);
   }, 30_000);
 
   test('without either verdict script it refuses', async () => {

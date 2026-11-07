@@ -33,7 +33,7 @@ export default function captcha(server: FastMCP): void {
     angleScript: z
       .string()
       .describe(
-        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element, and derive the grab from live state every call (a range input value mapped along its track) — the script is re-run when a drag has to be repeated, so a stale constant grab would press the wrong place. Keep any search-window state in a window variable so it shrinks as attempts go on.'
+        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element, and derive the grab from live state every call (a range input value mapped along its track) — the script is re-run when a drag has to be repeated, so a stale constant grab would press the wrong place. Keep any search-window state in a window variable so it shrinks as attempts go on. Land the final precision in `angle`: a drag is absolute (startAngle from live state to `angle` in one press), so deltas do not have to accumulate across presses, and on widgets that re-fit or redraw themselves nothing set by an earlier press survives — a sequence of small corrections is a sequence of absolute drags, never wheel ticks that add up. Return `confidence` (0–1) when the fit is scored from evidence (spread and peak of candidate answers): the tool logs it, and with minAngleConfidence a low value asks for a new picture instead of spending a hopeless drag.'
       ),
     successScript: z
       .string()
@@ -134,6 +134,14 @@ export default function captcha(server: FastMCP): void {
       .describe(
         'How long settleScript may stay falsy before a drag counts as unrecorded (default 2500).'
       ),
+    minAngleConfidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        'Gate on the confidence angleScript reports. Below it, the challenge is refreshed rather than dragged: an adversarial puzzle whose fit is a coin toss is a burnt attempt, and a fresh picture is cheaper. Bimodal fits are the case — when candidate answers agree and peak clearly, the drag is worth making; when they scatter on a flat band, it is not. Costs one attempt per refresh, and does nothing without `refresh` (the drag proceeds; only the log records the low value).'
+      ),
     identityScript: z
       .string()
       .optional()
@@ -145,7 +153,7 @@ export default function captcha(server: FastMCP): void {
   server.addTool({
     name: 'playwright_captcha_solve',
     description:
-      'Solve a rotation-dial captcha by dragging it round. Repeats: read the next angle from angleScript, drag the knob there with real pointer moves, screenshot the widget and score it with judgeScript (and/or check successScript), re-show and refresh, then stop when it passes. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
+      'Solve a rotation-dial captcha by dragging it round. Repeats: read the next angle from angleScript, drag the knob there with real pointer moves, screenshot the widget and score it with judgeScript (and/or check successScript), re-show and refresh, then stop when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
     parameters: schema,
     annotations: { readOnlyHint: false, openWorldHint: false },
     execute: async (args: z.infer<typeof schema>): Promise<ContentResult> => {
@@ -172,6 +180,7 @@ export default function captcha(server: FastMCP): void {
       const maxMs = args.maxMs ?? 90_000;
       const maxAge = args.maxAgeMs ?? 55_000;
       const settleTimeout = args.settleTimeoutMs ?? 2500;
+      const minConfidence = args.minAngleConfidence;
       const frame =
         args.frame === undefined
           ? driver.page.mainFrame()
@@ -180,6 +189,10 @@ export default function captcha(server: FastMCP): void {
       const started = Date.now();
       let challengeAt = started;
       let lastOk = false;
+      // Drags the widget threw back. Each repeat starts from a fresh solve, so
+      // the widget's own state has been reset in between: a score read after a
+      // repeat is a new baseline, not an improvement on the previous one.
+      let repeats = 0;
       const scores: number[] = [];
 
       const box = async (selector: string) => {
@@ -398,17 +411,22 @@ export default function captcha(server: FastMCP): void {
            * so the grab has to come from fresh state rather than the first
            * calculation.
            */
-          const aimAndDrag = async () => {
-            const out = await frame.evaluate(args.angleScript);
+          type AngleAnswer = {
+            angle?: number;
+            direction?: string;
+            startAngle?: number;
+            radius?: number;
+            grab?: { x?: number; y?: number };
+            confidence?: number;
+            confidenceNote?: string;
+          };
+
+          const aimAndDrag = async (seed?: AngleAnswer) => {
+            const out =
+              seed ?? ((await frame.evaluate(args.angleScript)) as unknown);
             const next = (
               typeof out === 'number' ? { angle: out } : (out ?? {})
-            ) as {
-              angle?: number;
-              direction?: string;
-              startAngle?: number;
-              radius?: number;
-              grab?: { x?: number; y?: number };
-            };
+            ) as AngleAnswer;
             if (!next || typeof next.angle !== 'number') {
               log.push(
                 `angleScript returned ${JSON.stringify(out)} — no angle to try`
@@ -501,7 +519,51 @@ export default function captcha(server: FastMCP): void {
             return { angle: next.angle, startAngle, steps };
           };
 
-          let moved = await aimAndDrag();
+          // One solve up front, so a fit that is not worth dragging can be
+          // gated before the press. The press itself is absolute: from the
+          // live start angle to this answer in one drag.
+          const first = (await frame.evaluate(args.angleScript)) as unknown;
+          const seed = (
+            typeof first === 'number' ? { angle: first } : (first ?? {})
+          ) as AngleAnswer;
+          const confidence =
+            typeof seed.confidence === 'number' ? seed.confidence : undefined;
+          if (confidence !== undefined) {
+            log.push(
+              `attempt ${attempt}: angle fit confidence ${confidence.toFixed(2)}` +
+                (typeof seed.confidenceNote === 'string'
+                  ? ` (${seed.confidenceNote})`
+                  : '')
+            );
+          }
+          if (
+            minConfidence !== undefined &&
+            confidence !== undefined &&
+            confidence < minConfidence
+          ) {
+            // An adversarial puzzle with a coin-toss fit burns the attempt
+            // either way; a fresh picture is the cheaper try. The attempt
+            // counter still moves, so refreshes cannot loop forever.
+            if (
+              args.refresh &&
+              (await clickIfPresent(args.refresh, 'refresh'))
+            ) {
+              log.push(
+                `attempt ${attempt}: fit ${confidence.toFixed(2)} < ${minConfidence} — refreshed instead of dragging`
+              );
+              challengeAt = Date.now();
+              continue;
+            }
+            log.push(
+              `attempt ${attempt}: weak fit and ${
+                args.refresh
+                  ? 'the refresh control did not take'
+                  : 'no refresh control'
+              } — dragging anyway`
+            );
+          }
+
+          let moved = await aimAndDrag(seed);
           if (!moved) {
             break;
           }
@@ -513,6 +575,10 @@ export default function captcha(server: FastMCP): void {
             log.push(
               `attempt ${attempt}: drag not recorded yet — repeating (${retry + 1}/2)`
             );
+            repeats++;
+            // Fresh solve, never the angle that just failed: the widget has
+            // reset its own base in between, so the old start angle is stale
+            // and reusing it lands in the same place again.
             const again = await aimAndDrag();
             if (!again) {
               break;
@@ -583,7 +649,10 @@ export default function captcha(server: FastMCP): void {
         // one: the press keeps landing on the same wrong pixels.
         if (scores.length >= 2 && new Set(scores).size === 1) {
           log.push(
-            `every attempt scored ${scores[0].toFixed(3)} — suspect the grab (the press may be missing the control), not the angle`
+            `every attempt scored ${scores[0].toFixed(3)} — suspect the grab (the press may be missing the control), not the angle` +
+              (repeats > 0
+                ? '; a repeated drag resets the widget to its own base, so the score after one is a new baseline and its being unchanged is expected'
+                : '')
           );
         }
 
