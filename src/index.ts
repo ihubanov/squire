@@ -3,6 +3,20 @@
 import server from './server.js';
 import log from './logger.js';
 
+// Playwright and the CDP relay throw from inside event handlers when a
+// browser sends something the bundled Playwright build does not expect (e.g.
+// Chrome 155 attaching a `shared_worker` target with no browserContextId —
+// that killed the whole server on the first tool call after an attach).
+// Those throws are not fatal to our state: the target is simply skipped.
+// Log and keep serving instead of letting the process die and take every
+// session's transport with it.
+process.on('uncaughtException', (err) => {
+  log.error('Uncaught exception (server kept alive):', err);
+});
+process.on('unhandledRejection', (reason) => {
+  log.error('Unhandled rejection (server kept alive):', reason);
+});
+
 // Parse command line arguments
 const args = process.argv.slice(2);
 const useHttpStream = args.includes('--httpStream');

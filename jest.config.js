@@ -11,12 +11,19 @@ export default {
     '^@appium/support$': '<rootDir>/src/tests/__mocks__/@appium/support.ts',
   },
   // Ignore compiled files under dist to prevent duplicate test discovery
-  testPathIgnorePatterns: ['/dist/', '/node_modules/', '/src/resources/submodules'],
+  testPathIgnorePatterns: [
+    '/dist/',
+    '/node_modules/',
+    '/src/resources/submodules',
+  ],
   transform: {
     '^.+\\.tsx?$': [
       'ts-jest',
       {
         useESM: true,
+        // Tests use top-level `await` for dynamic imports after mocks.
+        // NodeNext alone doesn't permit it under ts-jest's hybrid kind.
+        tsconfig: { module: 'ESNext', target: 'ES2022' },
       },
     ],
   },

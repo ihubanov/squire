@@ -57,6 +57,7 @@ To have Squire work in your own Chrome, turn on remote debugging at `chrome://in
 | `APPIUM_MCP_CHROME_PROFILE_DIR` | Chrome profile directory to read `DevToolsActivePort` from, when it isn't the default Chrome/Chromium one. |
 | `APPIUM_MCP_RESPECT_USER_FOCUS` | `true` to stop the AI acting on the tab the user is looking at (for shared screens). Default off, so you and the AI can work in the same tab. |
 | `APPIUM_MCP_VISION_MODEL` / `APPIUM_MCP_VISION_PYTHON` | Enable the ONNX icon detector (path to the `.onnx` + a Python with `onnxruntime`). OCR text grounding works without them. |
+| `APPIUM_MCP_CAPTCHA` | `1` registers `playwright_captcha_solve`, the rotation-dial loop (off by default while it is new). |
 
 ## Credits and license
 

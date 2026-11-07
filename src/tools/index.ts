@@ -69,10 +69,13 @@ import switchContext from './context/switch-context.js';
 import navigate from './web/navigate.js';
 import { goBack, goForward, reload } from './web/browser-navigation.js';
 import evaluate from './web/evaluate.js';
+import frames from './web/frames.js';
+import captcha from './web/captcha.js';
 import runScriptTool from './web/run-script.js';
 import present from './web/present.js';
 import selectOption from './web/select-option.js';
 import hover from './web/hover.js';
+import pointer from './web/pointer.js';
 import {
   newTab,
   switchTab,
@@ -86,6 +89,7 @@ import {
 } from './web/keyboard.js';
 import getUrl from './web/get-url.js';
 
+/** Registers every tool set, wrapping addTool with activity logging. */
 export default function registerTools(server: FastMCP): void {
   const webOnly = isWebOnly();
 
@@ -272,10 +276,17 @@ export default function registerTools(server: FastMCP): void {
   goForward(server);
   reload(server);
   evaluate(server);
+  frames(server);
   runScriptTool(server);
   present(server);
   selectOption(server);
   hover(server);
+  pointer(server);
+  // Captcha help is off unless asked: the loop is young, and a tool that is
+  // not there cannot be picked by mistake.
+  if (process.env.APPIUM_MCP_CAPTCHA === '1') {
+    captcha(server);
+  }
   newTab(server);
   switchTab(server);
   listTabs(server);

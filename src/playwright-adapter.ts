@@ -4,7 +4,13 @@
  * Bridges Playwright's Locator/ElementHandle-based API to the UUID-based
  * element model used by the existing tool infrastructure.
  */
-import type { Browser, BrowserContext, Page, ElementHandle } from 'playwright';
+import type {
+  Browser,
+  BrowserContext,
+  Page,
+  ElementHandle,
+  Frame,
+} from 'playwright';
 import { randomUUID } from 'node:crypto';
 
 /**
@@ -93,6 +99,74 @@ export class PlaywrightDriver {
       url: p.url(),
       active: p === active,
     }));
+  }
+
+  // ── Frame access ────────────────────────────────────────────────
+
+  /**
+   * Frames of a page with a stable index (0 is always the main frame).
+   * Cross-origin frames are included: Playwright resolves out-of-process
+   * frames over CDP, which is the only way to reach inside a captcha
+   * widget (its iframe belongs to another origin, so page JS cannot).
+   */
+  listFrames(
+    page: Page
+  ): { index: number; url: string; name: string; main: boolean }[] {
+    const main = page.mainFrame();
+    return page.frames().map((f, index) => ({
+      index,
+      url: f.url(),
+      name: f.name(),
+      main: f === main,
+    }));
+  }
+
+  /**
+   * Resolve a frame target: "main", a numeric index from listFrames, or a
+   * case-insensitive substring of the frame's URL or name. Errors list the
+   * available frames so a miss is self-correcting.
+   */
+  resolveFrame(page: Page, target: string | number): Frame {
+    const frames = page.frames();
+    if (target === 'main' || target === '') {
+      return page.mainFrame();
+    }
+    if (typeof target === 'number' || /^\d+$/.test(String(target))) {
+      const index = Number(target);
+      const frame = frames[index];
+      if (!frame) {
+        throw new Error(
+          `No frame at index ${index}. Available frames:\n${this.describeFrames(page)}`
+        );
+      }
+      return frame;
+    }
+    const needle = String(target).toLowerCase();
+    const matches = frames.filter(
+      (f) =>
+        (f.url() && f.url().toLowerCase().includes(needle)) ||
+        (f.name() && f.name().toLowerCase().includes(needle))
+    );
+    if (matches.length === 0) {
+      throw new Error(
+        `No frame matching "${target}". Available frames:\n${this.describeFrames(page)}`
+      );
+    }
+    if (matches.length > 1 && matches[0] !== page.mainFrame()) {
+      throw new Error(
+        `"${target}" matches ${matches.length} frames — use a more specific substring or an index:\n${this.describeFrames(page)}`
+      );
+    }
+    return matches[0];
+  }
+
+  private describeFrames(page: Page): string {
+    return this.listFrames(page)
+      .map(
+        (f) =>
+          `  [${f.index}]${f.main ? ' (main)' : ''} ${f.name ? `${f.name} ` : ''}${f.url || 'about:blank'}`
+      )
+      .join('\n');
   }
 
   // ── Element Registry ────────────────────────────────────────────

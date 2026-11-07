@@ -115,6 +115,22 @@ Partial OCR matches count (half the label's words, contiguous). Vision works for
 
 The submit navigates; the `wait` and the verify `eval` run on the logged-in page. If the submit selector is wrong, the run stops there with a `continuationId` — fix the selector and `resume`.
 
+## Captchas
+
+Captchas are a small family, not one thing. Identify the kind before reaching for a tool.
+
+- **Widget (reCAPTCHA, hCaptcha, Turnstile, image-grid).** It lives in a cross-origin iframe, which page JS cannot see into. `playwright_frames` lists the frame; `playwright_evaluate({ frame: "recaptcha" })` runs inside it. The sitekey is in that frame's URL (`k=` parameter) and the response token is a hidden textarea in the *main* frame (`#g-recaptcha-response`, `.h-captcha-response`, `[name="cf-turnstile-response"]`) that page JS reads after the widget passes. Checkbox widgets usually just need one real click; then verify the token has a value, and only then submit.
+- **Rotation dial / knob / radial slider.** A circle with a handle, driven by absolute pointer angle from the centre. `playwright_element_box` gives the dial and handle boxes; `playwright_drag_arc({ elementUUID: dial, handleUUID: handle, endAngle })` presses the knob and drags it round in small real moves. The true angle often has to be recovered from an image — screenshot the widget and correlate rotated candidates in `playwright_evaluate`, do not expect the answer in a JS variable.
+- **Plain image / text challenge.** Screenshot it, read it, type into the input.
+
+`playwright_captcha_solve` runs the whole dial loop for you when the backend has `APPIUM_MCP_CAPTCHA=1`: dial/handle selectors, an `angleScript` that names the next angle (keep its search window in a `window` variable), a `successScript` for the verdict, and a `refresh` selector so a dead image gets replaced. Do the angle judgement yourself when the tool is not registered.
+
+Rules that apply to all of them:
+- A single jump does not register on angle- and movement-driven widgets; pass enough `steps` and a small `stepDelayMs`.
+- Solve in **consecutive** attempts, and refresh after ~3 misses rather than hammering an unsolvable image — click the widget's own reload control.
+- Detect success and failure, never assume: success is the thing the captcha guarded (the field, the reveal, the next page); failure is a changed challenge image or an error element. Poll for either with `playwright_evaluate`.
+- Have the user solve it when they are at the machine and it is cheap; hand over when a solve fails twice.
+
 ## Verify, don't assume
 
 A step returning `status: "ok"` means the action didn't throw — not that the flow achieved its goal. Confirm with a final `eval` (a logged-in-only element, the expected URL/host, a success banner) or a screenshot before reporting success.

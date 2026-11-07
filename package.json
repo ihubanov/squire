@@ -1,7 +1,7 @@
 {
   "name": "@sniffski/squire",
   "mcpName": "io.github.ihubanov/squire",
-  "version": "1.32.2",
+  "version": "1.33.0",
   "type": "module",
   "repository": {
     "type": "git",
@@ -60,7 +60,7 @@
     "langchain": "^1.1.6",
     "lodash": "^4.17.21",
     "node-simctl": "^8.0.4",
-    "playwright": "^1.58.2",
+    "playwright": "^1.65.0",
     "rimraf": "^6.0.1",
     "webdriver": "^9.23.0",
     "ws": "^8.18.0",
