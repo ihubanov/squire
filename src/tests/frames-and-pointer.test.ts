@@ -76,6 +76,49 @@ const DIAL = `
  })();
 </script>`;
 
+/**
+ * A dial whose knob is not an element — the thumb of a range input, a canvas
+ * sprite. The caller can only aim it by bearing, so the geometry has to come
+ * from the angleScript. Starts at 30° on a 120px radius.
+ */
+const THUMB_DIAL = `
+<style>
+  body { margin: 0 }
+  #dial { position:absolute; left:200px; top:200px; width:300px; height:300px;
+          border-radius:50%; border:2px solid #333 }
+  #thumb { position:absolute; width:16px; height:16px; border-radius:50%;
+           background:#c00; transform:translate(-50%,-50%) }
+</style>
+<div id="dial"></div><div id="thumb"></div>
+<script>
+ (function () {
+  const dial = document.getElementById('dial');
+  const thumb = document.getElementById('thumb');
+  const R = 120, START = 30;
+  const b = dial.getBoundingClientRect();
+  const centre = { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+  const place = (a) => {
+    thumb.style.left = centre.x + R * Math.cos(a * Math.PI / 180) + 'px';
+    thumb.style.top  = centre.y + R * Math.sin(a * Math.PI / 180) + 'px';
+  };
+  place(START);
+  let dragging = false, last = START, downAt = null, moves = 0;
+  document.addEventListener('mousedown', (e) => {
+    dragging = true; moves = 0; downAt = { x: e.clientX, y: e.clientY };
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    moves++;
+    const a = Math.atan2(e.clientY - centre.y, e.clientX - centre.x) * 180 / Math.PI;
+    last = a < 0 ? a + 360 : a;
+    place(last);
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) { dragging = false; window.__result = { angle: last, moves, downAt }; }
+  });
+ })();
+</script>`;
+
 let browser: Browser;
 let driver: InstanceType<typeof PlaywrightDriver>;
 let page: Page;
@@ -249,6 +292,66 @@ describe('playwright_captcha_solve', () => {
     expect(text).toMatch(/^Solved in \d+s/);
     expect(text).toContain('PASSED');
     expect(text).toMatch(/capture \d+x\d+/);
+  }, 30_000);
+
+  test('a knob that is not an element is aimed by bearing from the script', async () => {
+    // A range-input thumb has no usable box: the input's box spans the whole
+    // track. With no handle selector, the script has to say where the knob is.
+    await page.setContent(THUMB_DIAL);
+    const geo = await page.evaluate(() => {
+      const d = document.getElementById('dial')!.getBoundingClientRect();
+      const t = document.getElementById('thumb')!.getBoundingClientRect();
+      return {
+        thumb: { x: t.left + t.width / 2, y: t.top + t.height / 2 },
+        offset: {
+          x: t.left + t.width / 2 - d.left,
+          y: t.top + t.height / 2 - d.top,
+        },
+      };
+    });
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      // grab offsets are px from the dial box top-left, so the frame's own
+      // offset never leaks into the caller's numbers.
+      angleScript: `(() => ({ angle: 60, grab: { x: ${geo.offset.x}, y: ${geo.offset.y} } }))()`,
+      successScript:
+        '(() => { const r = window.__result; return !!r && Math.abs(r.angle - 60) < 5; })()',
+      settleMs: 150,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Solved in \d+s/);
+    // 30° derived from the grab point, then +30° the short way round.
+    expect(text).toMatch(/attempt 1: 30° → 60°/);
+
+    const out = await page.evaluate(() => (window as any).__result);
+    // The press landed on the thumb, not on the track centre.
+    expect(
+      Math.hypot(out.downAt.x - geo.thumb.x, out.downAt.y - geo.thumb.y)
+    ).toBeLessThan(3);
+    expect(Math.abs(out.angle - 60)).toBeLessThan(5);
+  }, 30_000);
+
+  test('startAngle and radius alone drive the press point', async () => {
+    await page.setContent(THUMB_DIAL);
+    const thumb = await page.evaluate(() => {
+      const t = document.getElementById('thumb')!.getBoundingClientRect();
+      return { x: t.left + t.width / 2, y: t.top + t.height / 2 };
+    });
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      angleScript: '(() => ({ angle: 150, startAngle: 30, radius: 120 }))()',
+      successScript:
+        '(() => { const r = window.__result; return !!r && Math.abs(r.angle - 150) < 5; })()',
+      settleMs: 150,
+      maxAttempts: 1,
+    });
+    expect(res.content[0].text).toMatch(/^Solved in \d+s/);
+    const out = await page.evaluate(() => (window as any).__result);
+    expect(
+      Math.hypot(out.downAt.x - thumb.x, out.downAt.y - thumb.y)
+    ).toBeLessThan(3);
+    expect(Math.abs(out.angle - 150)).toBeLessThan(5);
   }, 30_000);
 
   test('without either verdict script it refuses', async () => {

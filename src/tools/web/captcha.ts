@@ -26,13 +26,14 @@ export default function captcha(server: FastMCP): void {
       .describe('CSS selector of the dial body, e.g. ".roulette" or "#dial".'),
     handle: z
       .string()
+      .optional()
       .describe(
-        'CSS selector of the knob to grab, e.g. ".roulette-handle". Its current bearing gives the start angle.'
+        'CSS selector of the knob to grab, e.g. ".roulette-handle". Its current bearing gives the start angle and its box centre the press point. Omit it when the knob is not an element (a range-input thumb, a canvas sprite) and let angleScript return startAngle/radius/grab instead. Its box alone is wrong for a range thumb: that box spans the whole track.'
       ),
     angleScript: z
       .string()
       .describe(
-        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). Keep any search-window state in a window variable so it shrinks as attempts go on.'
+        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element. Keep any search-window state in a window variable so it shrinks as attempts go on.'
       ),
     successScript: z
       .string()
@@ -203,7 +204,9 @@ export default function captcha(server: FastMCP): void {
       const judged = async (
         target: { x: number; y: number; width: number; height: number },
         dialBox: { x: number; y: number; width: number; height: number },
-        handleBox: { x: number; y: number; width: number; height: number },
+        handleBox:
+          | { x: number; y: number; width: number; height: number }
+          | undefined,
         angle: number,
         attempt: number
       ): Promise<{ ok: boolean; note: string }> => {
@@ -308,7 +311,6 @@ export default function captcha(server: FastMCP): void {
           // Measure first so a wrong selector is reported even when the
           // token check would short-circuit the attempt.
           const dialBox = await box(args.dial);
-          const handleBox = await box(args.handle);
 
           if (await tokenPassed()) {
             log.push('passed before the next drag');
@@ -318,7 +320,13 @@ export default function captcha(server: FastMCP): void {
           const out = await frame.evaluate(args.angleScript);
           const next = (
             typeof out === 'number' ? { angle: out } : (out ?? {})
-          ) as { angle?: number; direction?: string };
+          ) as {
+            angle?: number;
+            direction?: string;
+            startAngle?: number;
+            radius?: number;
+            grab?: { x?: number; y?: number };
+          };
           if (!next || typeof next.angle !== 'number') {
             log.push(
               `angleScript returned ${JSON.stringify(out)} — no angle to try`
@@ -328,13 +336,44 @@ export default function captcha(server: FastMCP): void {
 
           const cx = dialBox.x + dialBox.width / 2;
           const cy = dialBox.y + dialBox.height / 2;
-          const grab = {
-            x: handleBox.x + handleBox.width / 2,
-            y: handleBox.y + handleBox.height / 2,
-          };
-          const startAngle =
-            (Math.atan2(grab.y - cy, grab.x - cx) * 180) / Math.PI;
-          const radius = Math.hypot(grab.x - cx, grab.y - cy) || 40;
+
+          // The angleScript may describe the knob itself, because a knob is
+          // not always an element (a range-input thumb has no box of its own —
+          // the input's box spans the whole track). Anything it gives wins;
+          // a handle element only fills in what is left.
+          let startAngle =
+            typeof next.startAngle === 'number' ? next.startAngle : undefined;
+          let radius =
+            typeof next.radius === 'number' ? next.radius : undefined;
+          let grab: { x: number; y: number } | undefined =
+            next.grab &&
+            typeof next.grab.x === 'number' &&
+            typeof next.grab.y === 'number'
+              ? // Offsets are relative to the dial box, so the frame's own
+                // offset and the page scroll both stay out of the caller's way.
+                { x: dialBox.x + next.grab.x, y: dialBox.y + next.grab.y }
+              : undefined;
+          const bearing = (p: { x: number; y: number }) =>
+            (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI;
+          if (grab && startAngle === undefined) {
+            startAngle = bearing(grab);
+          }
+          let handleBox:
+            | { x: number; y: number; width: number; height: number }
+            | undefined;
+          if (!grab && args.handle) {
+            handleBox = await box(args.handle);
+            grab = {
+              x: handleBox.x + handleBox.width / 2,
+              y: handleBox.y + handleBox.height / 2,
+            };
+            radius ??= Math.hypot(grab.x - cx, grab.y - cy) || 40;
+            startAngle ??= bearing(grab);
+          }
+          startAngle ??= 0;
+          // No knob geometry at all: grab the rim, which is right for a dial
+          // whose rim is the control.
+          radius ??= Math.min(dialBox.width, dialBox.height) * 0.375;
 
           let delta = next.angle - startAngle;
           if (next.direction === 'cw') {
