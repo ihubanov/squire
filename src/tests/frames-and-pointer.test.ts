@@ -160,6 +160,7 @@ const CLOBBER_DIAL = THUMB_DIAL.replace(
 let browser: Browser;
 let driver: InstanceType<typeof PlaywrightDriver>;
 let page: Page;
+let load: (html: string) => Promise<void>;
 const execs: Record<string, (a: Record<string, unknown>) => Promise<any>> = {};
 
 beforeAll(async () => {
@@ -168,6 +169,15 @@ beforeAll(async () => {
     viewport: { width: 1000, height: 800 },
   });
   page = await context.newPage();
+  // setContent reuses the same window, so globals from the previous test
+  // (window.__result) leak into the next one. A real navigation clears them.
+  let loads = 0;
+  load = async (html: string) => {
+    // Unique commit target: repeating the same about:blank navigation races
+    // the previous one and gets reported as interrupted.
+    await page.goto(`about:blank?${++loads}`);
+    await page.setContent(html);
+  };
   driver = new PlaywrightDriver(browser, context, page);
   (current as unknown) = driver;
   pointerTool({
@@ -198,7 +208,7 @@ afterAll(async () => {
 
 describe('playwright_drag_arc', () => {
   test('turns a dial to the requested angle through many real moves', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     const dialBox = await page.waitForSelector('#dial');
     const handle = await page.waitForSelector('#handle');
     const dialId = driver.registerElement(dialBox);
@@ -219,9 +229,7 @@ describe('playwright_drag_arc', () => {
   }, 30_000);
 
   test('start angle comes from the handle, not from 0', async () => {
-    await page.setContent(
-      DIAL.replace('left:440px; top:340px', 'left:340px; top:190px')
-    );
+    await load(DIAL.replace('left:440px; top:340px', 'left:340px; top:190px'));
     const dialBox = await page.waitForSelector('#dial');
     const handle = await page.waitForSelector('#handle');
     const res = await execs.playwright_drag_arc({
@@ -240,7 +248,7 @@ describe('playwright_drag_arc', () => {
 
 describe('playwright_element_box', () => {
   test('reports the handle position', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     const handle = await page.waitForSelector('#handle');
     const res = await execs.playwright_element_box({
       elementUUID: driver.registerElement(handle),
@@ -255,7 +263,7 @@ describe('playwright_element_box', () => {
     // A cross-origin widget (card iframe, embedded dial) needs its frame's
     // position, since viewport coordinates alone say nothing about where the
     // frame sits when the caller wants to clip a screenshot of it.
-    await page.setContent(
+    await load(
       '<iframe id="f" style="position:absolute;left:100px;top:50px;width:300px;height:200px;border:0"' +
         ' srcdoc="<div id=inner style=&quot;position:absolute;left:20px;top:10px;width:20px;height:20px&quot;></div>"></iframe>'
     );
@@ -274,7 +282,7 @@ describe('playwright_element_box', () => {
 
 describe('playwright_frames', () => {
   test('lists a child frame and evaluates into it', async () => {
-    await page.setContent(
+    await load(
       '<iframe id="f" src="data:text/html,<p id=x>inside</p>"></iframe>'
     );
     const listed = await execs.playwright_frames({});
@@ -292,7 +300,7 @@ describe('playwright_frames', () => {
 
 describe('playwright_captcha_solve', () => {
   test('drags to the angle the script asks for and stops on success', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     const res = await execs.playwright_captcha_solve({
       dial: '#dial',
       handle: '#handle',
@@ -309,7 +317,7 @@ describe('playwright_captcha_solve', () => {
   }, 30_000);
 
   test('judgeScript gets a screenshot of the capture region and decides', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     const res = await execs.playwright_captcha_solve({
       dial: '#dial',
       handle: '#handle',
@@ -335,7 +343,7 @@ describe('playwright_captcha_solve', () => {
   test('a knob that is not an element is aimed by bearing from the script', async () => {
     // A range-input thumb has no usable box: the input's box spans the whole
     // track. With no handle selector, the script has to say where the knob is.
-    await page.setContent(THUMB_DIAL);
+    await load(THUMB_DIAL);
     const geo = await page.evaluate(() => {
       const d = document.getElementById('dial')!.getBoundingClientRect();
       const t = document.getElementById('thumb')!.getBoundingClientRect();
@@ -371,7 +379,7 @@ describe('playwright_captcha_solve', () => {
   }, 30_000);
 
   test('startAngle and radius alone drive the press point', async () => {
-    await page.setContent(THUMB_DIAL);
+    await load(THUMB_DIAL);
     const thumb = await page.evaluate(() => {
       const t = document.getElementById('thumb')!.getBoundingClientRect();
       return { x: t.left + t.width / 2, y: t.top + t.height / 2 };
@@ -401,7 +409,7 @@ describe('playwright_captcha_solve', () => {
   });
 
   test('repeats a drag the widget discarded until it settles', async () => {
-    await page.setContent(CLOBBER_DIAL);
+    await load(CLOBBER_DIAL);
     // The script reads the thumb from live state on every call, as a
     // range-thumb solver must: the first drag is thrown back to 30°, and a
     // constant grab would press empty space on the repeat.
@@ -432,7 +440,7 @@ describe('playwright_captcha_solve', () => {
   }, 30_000);
 
   test('an unsettled dial is a miss even when the picture looks right', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     const res = await execs.playwright_captcha_solve({
       dial: '#dial',
       handle: '#handle',
@@ -450,8 +458,59 @@ describe('playwright_captcha_solve', () => {
     expect(text).not.toContain('PASSED');
   }, 30_000);
 
+  test('a picture replaced mid-attempt is a miss and skips the score', async () => {
+    await load(DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => 200)()',
+      // The fixture sets window.__result on release, so the identity moves
+      // exactly when the picture would have been swapped under the drag.
+      identityScript: "(() => (window.__result ? 'after' : 'before'))()",
+      judgeScript: '(() => ({ ok: true, note: "SHOULDNOTAPPEAR" }))',
+      settleMs: 100,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Not solved/);
+    expect(text).toContain('picture was replaced mid-attempt');
+    expect(text).not.toContain('SHOULDNOTAPPEAR');
+  }, 30_000);
+
+  test('a stable identity lets the score decide', async () => {
+    await load(DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => 200)()',
+      identityScript: "(() => 'same-puzzle')()",
+      judgeScript: '(() => ({ ok: true, note: "scored" }))',
+      settleMs: 100,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Solved in \d+s/);
+    expect(text).toContain('scored');
+  }, 30_000);
+
+  test('identical scores across attempts point at the grab', async () => {
+    await load(DIAL);
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => 200)()',
+      // A flat judge: the same wrong score however far the dial turned.
+      judgeScript: '(() => 0.25)',
+      settleMs: 100,
+      maxAttempts: 2,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Not solved/);
+    expect(text).toContain('suspect the grab');
+  }, 30_000);
+
   test('without either verdict script it refuses', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     await expect(
       execs.playwright_captcha_solve({
         dial: '#dial',
@@ -462,7 +521,7 @@ describe('playwright_captcha_solve', () => {
   }, 15_000);
 
   test('says what is missing when a selector matches nothing', async () => {
-    await page.setContent(DIAL);
+    await load(DIAL);
     const res = await execs.playwright_captcha_solve({
       dial: '#nope',
       handle: '#handle',

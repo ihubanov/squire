@@ -134,6 +134,12 @@ export default function captcha(server: FastMCP): void {
       .describe(
         'How long settleScript may stay falsy before a drag counts as unrecorded (default 2500).'
       ),
+    identityScript: z
+      .string()
+      .optional()
+      .describe(
+        "JS run in the main frame; returns a stable string that names the current challenge (a session token in a hidden field, an image src). Read before the drag and again before judging: a picture replaced mid-attempt makes the screenshot meaningless, so the score is skipped and the attempt counts as a miss. Use a value that outlives image fetches — a per-image URL is replaced by the widget's own refresh, not by this."
+      ),
   });
 
   server.addTool({
@@ -174,6 +180,7 @@ export default function captcha(server: FastMCP): void {
       const started = Date.now();
       let challengeAt = started;
       let lastOk = false;
+      const scores: number[] = [];
 
       const box = async (selector: string) => {
         const locator = frame.locator(selector).first();
@@ -211,6 +218,22 @@ export default function captcha(server: FastMCP): void {
           return false;
         }
       };
+      /**
+       * The current challenge's identity, when the page offers one. Some
+       * widgets swap the picture mid-flow; a score taken after that is of a
+       * puzzle that no longer exists.
+       */
+      const identity = async (): Promise<string | undefined> => {
+        if (!args.identityScript) {
+          return undefined;
+        }
+        try {
+          const v = await driver.page.mainFrame().evaluate(args.identityScript);
+          return v === undefined || v === null ? undefined : String(v);
+        } catch {
+          return undefined;
+        }
+      };
 
       /**
        * Screenshots the capture region and lets judgeScript score it. The
@@ -225,7 +248,7 @@ export default function captcha(server: FastMCP): void {
           | undefined,
         angle: number,
         attempt: number
-      ): Promise<{ ok: boolean; note: string }> => {
+      ): Promise<{ ok: boolean; note: string; score?: number }> => {
         if (!args.judgeScript) {
           return { ok: true, note: '' };
         }
@@ -261,6 +284,7 @@ export default function captcha(server: FastMCP): void {
           return {
             ok: verdict >= passScore,
             note: `score ${verdict.toFixed(3)} (pass ≥ ${passScore})`,
+            score: verdict,
           };
         }
         if (verdict && typeof verdict === 'object') {
@@ -281,6 +305,7 @@ export default function captcha(server: FastMCP): void {
             ]
               .filter(Boolean)
               .join(' — '),
+            score: typeof v.score === 'number' ? v.score : undefined,
           };
         }
         return {
@@ -354,6 +379,10 @@ export default function captcha(server: FastMCP): void {
             log.push('passed before the next drag');
             break;
           }
+
+          // Which picture this attempt is scoring, so a mid-drag swap is
+          // noticed before the screenshot is spent on a stale puzzle.
+          const challengeId = await identity();
 
           const cx = dialBox.x + dialBox.width / 2;
           const cy = dialBox.y + dialBox.height / 2;
@@ -497,15 +526,32 @@ export default function captcha(server: FastMCP): void {
             );
           }
 
+          // The widget replaced the picture while being dragged: the crop
+          // below is a puzzle the angle was never aimed at, so skip the
+          // vision pass — the token still decides if it turned up anyway.
+          const replaced =
+            challengeId !== undefined && (await identity()) !== challengeId;
+          if (replaced) {
+            log.push(
+              `attempt ${attempt}: the picture was replaced mid-attempt — score skipped`
+            );
+          }
+
           const captureBox = args.capture ? await box(args.capture) : dialBox;
           await sleep(hold);
-          const verdict = await judged(
-            captureBox,
-            dialBox,
-            handleBox,
-            moved.angle,
-            attempt
-          );
+          const verdict: { ok: boolean; note: string; score?: number } =
+            replaced
+              ? { ok: false, note: 'picture replaced mid-attempt' }
+              : await judged(
+                  captureBox,
+                  dialBox,
+                  handleBox,
+                  moved.angle,
+                  attempt
+                );
+          if (typeof verdict.score === 'number') {
+            scores.push(verdict.score);
+          }
           const token = await tokenPassed();
           // The token is authoritative when it exists; a picture score that
           // disagrees is worth reporting, not obeying. An unsettled dial
@@ -531,6 +577,14 @@ export default function captcha(server: FastMCP): void {
             log.push('wall-clock cap hit');
             break;
           }
+        }
+
+        // The same score on every attempt is a geometry signal, not an angle
+        // one: the press keeps landing on the same wrong pixels.
+        if (scores.length >= 2 && new Set(scores).size === 1) {
+          log.push(
+            `every attempt scored ${scores[0].toFixed(3)} — suspect the grab (the press may be missing the control), not the angle`
+          );
         }
 
         const tokenNow = await tokenPassed();
