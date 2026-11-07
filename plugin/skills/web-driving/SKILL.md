@@ -138,7 +138,14 @@ Captchas are a small family, not one thing. Identify the kind before reaching fo
 
 `playwright_captcha_solve` runs the whole dial loop for you when the backend has `APPIUM_MCP_CAPTCHA=1`: a `dial` selector, an `angleScript` that names the next angle (keep its search window in a `window` variable), a `successScript` for the token verdict, and a `refresh` selector so a dead image gets replaced. `handle` is optional: when the knob is not an element, the `angleScript` returns `{ angle, startAngle, radius }` or `{ angle, grab: {x, y} }` (offsets from the dial box top-left) instead. Do the angle judgement yourself when the tool is not registered.
 
+Two things the DOM rarely gives you, and both move:
+
+- **Where the knob is.** Do not assume a cursor hotspot — plenty of range-thumb dials report `cursor: auto`. Read the control's own value and map it along the track box to get `grab`, and work the geometry out inside `angleScript` on every call rather than as a constant: the script is re-run when a drag has to be repeated, and a stale grab presses empty space.
+- **Whether the drag was accepted.** Widgets animate into place, and a value set mid-flight is silently discarded (some clear their own "touched" flag as well, and then submit refuses without a request). Pass `settleScript` returning truthy only when the control value equals the target **and** the widget's touched flag is set; the loop polls it, repeats an unrecorded drag, and will not score the picture as a pass while the dial is unsettled.
+
 The pass/fail call is where dial solvers usually go wrong — a vision model asked "is this solved?" on the raw widget scores near zero at every angle, right or wrong. Judge with code instead: `judgeScript` receives a PNG data URL of the capture region plus the geometry and must return a score. Make the test linear rather than visual — unroll the ring either side of its mask into bands, so a correct angle is a line that crosses without a sideways jump. Keep `successScript` alongside it for the token field when the site has one: a picture score is the guess, the token is the fact. The loop prefers the token whenever both exist. `beforeNext` re-shows a widget that hides itself after each drag, `maxAgeMs` replaces one whose signed image expires, and `holdMs` is the settle before the screenshot. When the capture clips, `playwright_element_box` reports page coordinates and scroll alongside the viewport ones.
+
+`successScript` must test something that only exists after a pass — a revealed number or token. A dialog wrapper's `innerText` is not enough: it permanently contains its own static strings ("the code expired", help text), so it never distinguishes a pass. Same for age: a challenge URL carrying a fresh token per image needs a short `maxAgeMs`; a card with a stable per-session token is fine at 20 s or more.
 
 Rules that apply to all of them:
 
