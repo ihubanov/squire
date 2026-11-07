@@ -43,6 +43,7 @@ const {
   touchActiveSession,
   reapIdleSessions,
   dropDisconnectedSession,
+  explainMissingSession,
 } = await import('../session-store.js');
 
 const { AndroidUiautomator2Driver } =
@@ -560,5 +561,34 @@ describe('dropDisconnectedSession', () => {
 
   test('returns false for an unknown session id', () => {
     expect(dropDisconnectedSession('pw-nope')).toBe(false);
+  });
+
+  test("the connection's next no-session error says why, until it has a session again", () => {
+    setSession(makeMockDriver(jest.fn(async () => {})), 'pw-cut');
+    dropDisconnectedSession(
+      'pw-cut',
+      'connection cut',
+      'Control revoked: the user took over.'
+    );
+    expect(
+      explainMissingSession(
+        'No Playwright web session found. Create a session with platform="web" first.'
+      )
+    ).toBe('Control revoked: the user took over.');
+    expect(explainMissingSession('No driver found')).toBe(
+      'Control revoked: the user took over.'
+    );
+    expect(explainMissingSession('Element not found')).toBeUndefined();
+
+    setSession(makeMockDriver(jest.fn(async () => {})), 'pw-next');
+    expect(explainMissingSession('No driver found')).toBeUndefined();
+  });
+
+  test('without a notice it still names the session and the reason', () => {
+    setSession(makeMockDriver(jest.fn(async () => {})), 'pw-closed');
+    dropDisconnectedSession('pw-closed', 'browser closed');
+    expect(explainMissingSession('No driver found')).toMatch(
+      /^Web session pw-closed ended: browser closed\./
+    );
   });
 });

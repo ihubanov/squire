@@ -63,6 +63,8 @@ clean → close the tabs you opened
 
    **Allow prompts.** With Chrome's remote-debugging toggle, Chrome asks the user to click Allow when Squire connects. Squire keeps one connection for its whole life, so this happens once, or again only if Chrome drops it. Tell the user before `create_session` that a prompt is coming.
 
+   **On a herdr card.** When the user asks to see or co-drive a browser ("open it", "show me", "let's do it together"), pass `shared: true` to `create_session` so the card's visible browser opens and the user can watch and take over. Leave it out for background scrapes, which stay private and headless. If a tool error starts with "Control revoked:", the user has taken control of that browser: stop and ask them in chat before doing anything else in it, and do not create a new session on your own.
+
 5. **Click like a person.** Use `playwright_run_script` click steps or `appium_click`: they send real mouse events at the element's centre. `element.click()` inside `playwright_evaluate` is an untrusted synthetic event that sites such as LinkedIn ignore. Find elements by visible text and role (`text=…`, ARIA roles), not by a site's CSS class names, which change without notice.
 
    **Match exactly.** Pick elements by an exact accessible name (`[aria-label="Edit about"]`, an exact button text), not by a name that merely *contains* your words: a "Show credential" link can contain a certificate's name too, and clicking it leaves the site. Don't click a link that leads off the current site unless that is the task.

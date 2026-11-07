@@ -14,7 +14,10 @@
  */
 import type { FastMCP } from 'fastmcp';
 import log from '../logger.js';
-import { touchActiveSession } from '../session-store.js';
+import {
+  explainMissingSession,
+  touchActiveSession,
+} from '../session-store.js';
 import {
   beginAction,
   endAction,
@@ -181,6 +184,10 @@ export default function registerTools(server: FastMCP): void {
           const duration = Date.now() - start;
           const msg = err?.stack || err?.message || String(err);
           log.error(`[TOOL ERROR] ${toolName} (${duration}ms): ${msg}`);
+          const why = explainMissingSession(String(err?.message ?? err));
+          if (why) {
+            throw new Error(why, { cause: err });
+          }
           throw err;
         }
       },

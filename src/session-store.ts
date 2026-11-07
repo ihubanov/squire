@@ -55,6 +55,13 @@ const sessions = new Map<string, SessionInfo>();
  * connection id keeps each client operating on its own driver.
  */
 const activeSessionByConnection = new Map<string, string>();
+/**
+ * Why each connection's active session went away under it (its browser
+ * closed or the connection was cut), kept until that connection creates or
+ * selects another session, so its next calls say so instead of a bare "no
+ * session".
+ */
+const droppedByConnection = new Map<string, string>();
 
 /** Active session id for the client making the current tool call. */
 function getActiveSessionId(): string | null {
@@ -66,6 +73,7 @@ function setActiveSessionForCurrent(id: string | null): void {
   const connectionId = currentConnectionId();
   if (id) {
     activeSessionByConnection.set(connectionId, id);
+    droppedByConnection.delete(connectionId);
   } else {
     activeSessionByConnection.delete(connectionId);
   }
@@ -235,7 +243,8 @@ export async function reapIdleSessions(
  */
 export function dropDisconnectedSession(
   sessionId: string,
-  reason = 'browser closed'
+  reason = 'browser closed',
+  notice?: string
 ): boolean {
   const s = sessions.get(sessionId);
   if (!s || s.isDeletingSession) {
@@ -245,6 +254,11 @@ export function dropDisconnectedSession(
   for (const [conn, id] of activeSessionByConnection.entries()) {
     if (id === sessionId) {
       activeSessionByConnection.delete(conn);
+      droppedByConnection.set(
+        conn,
+        notice ??
+          `Web session ${sessionId} ended: ${reason}. Create a new session if the task still needs one.`
+      );
     }
   }
   log.info(`Session ${sessionId} dropped: ${reason} (browser gone).`);
@@ -258,6 +272,21 @@ export function dropDisconnectedSession(
     /* advisory only */
   }
   return true;
+}
+
+const NO_SESSION =
+  /^No (Playwright web session found|active driver session|driver found|active session(?!s))/;
+
+/**
+ * For a tool's "no session" error: why the calling connection's session went
+ * away, if it went away under it, so the AI can tell a browser the user took
+ * over from one that was never created.
+ */
+export function explainMissingSession(message: string): string | undefined {
+  if (!NO_SESSION.test(message)) {
+    return undefined;
+  }
+  return droppedByConnection.get(currentConnectionId());
 }
 
 export function getDriver(sessionId?: string): NullableDriverInstance {

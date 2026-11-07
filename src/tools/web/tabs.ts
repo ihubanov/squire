@@ -138,9 +138,16 @@ export function newTab(server: FastMCP): void {
           newPagePromise.catch(() => {
             /* superseded by the catch below */
           });
+          // Open it in this session's browser context: a detached browser's
+          // context is not Chrome's default one, and a target made there
+          // never shows up in driver.context (the wait above timed out).
+          const { targetInfo } = await cdp.send('Target.getTargetInfo');
           await cdp.send('Target.createTarget', {
             url: args.url ?? 'about:blank',
             background: true,
+            ...(targetInfo.browserContextId
+              ? { browserContextId: targetInfo.browserContextId }
+              : {}),
           });
           page = await newPagePromise;
           // Wait for initial load (best-effort) so the AI can act on it

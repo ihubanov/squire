@@ -682,10 +682,16 @@ export async function openWebSession(opts: WebSessionOptions) {
   // the activity log so agents can see the browser vanished.
   // Intentional teardown (delete_session) sets isDeletingSession
   // first, so dropDisconnectedSession no-ops there.
+  // On an attached browser a cut connection is most often the user taking
+  // control (a herdr shared pane's force-take), so the session's next calls
+  // say "Control revoked:" and the AI stops and asks.
   const onDisconnected = () => {
     dropDisconnectedSession(
       sessionId,
-      'attached browser closed or its connection was cut (on a shared pane the user may have taken control: ask before reconnecting)'
+      'attached browser closed or its connection was cut (on a shared pane the user may have taken control: ask before reconnecting)',
+      attachedToUserBrowser
+        ? `${CONTROL_REVOKED_PREFIX} the connection to the attached browser${cdpEndpoint ? ` at ${cdpEndpoint}` : ''} was cut, so the user has most likely taken control of it (or closed it). Stop and ask the user in chat before trying again; do not create a new session on your own.`
+        : undefined
     );
   };
   browser.on('disconnected', onDisconnected);
