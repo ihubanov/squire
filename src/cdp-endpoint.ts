@@ -24,10 +24,18 @@ export function profileDirs(): string[] {
     'google-chrome-beta',
     'google-chrome-unstable',
     'chromium',
+    'BraveSoftware/Brave-Browser',
+    'BraveSoftware/Brave-Browser-Beta',
+    'BraveSoftware/Brave-Browser-Nightly',
+    'microsoft-edge',
   ].map((d) => join(home, '.config', d));
-  const mac = ['Google/Chrome', 'Google/Chrome Beta', 'Chromium'].map((d) =>
-    join(home, 'Library', 'Application Support', d)
-  );
+  const mac = [
+    'Google/Chrome',
+    'Google/Chrome Beta',
+    'Chromium',
+    'BraveSoftware/Brave-Browser',
+    'Microsoft Edge',
+  ].map((d) => join(home, 'Library', 'Application Support', d));
   return [...linux, ...mac];
 }
 
@@ -70,11 +78,16 @@ export async function toBrowserWebSocketUrl(endpoint: string): Promise<string> {
   if (res.status === 401 || res.status === 403 || res.status === 423) {
     throw refusedError(res.status, await res.text().catch(() => ''));
   }
-  const { webSocketDebuggerUrl } = (await res.json()) as {
-    webSocketDebuggerUrl?: string;
-  };
+  let webSocketDebuggerUrl: string | undefined;
+  try {
+    ({ webSocketDebuggerUrl } = (await res.json()) as {
+      webSocketDebuggerUrl?: string;
+    });
+  } catch {
+    /* empty or not JSON: no discovery here */
+  }
   if (!webSocketDebuggerUrl) {
-    throw new Error(`${endpoint} gave no webSocketDebuggerUrl`);
+    throw new Error(noDiscoveryMessage(endpoint));
   }
   // Chrome reports its own idea of the host; keep the one we were given.
   const ws = new URL(webSocketDebuggerUrl);
@@ -82,15 +95,36 @@ export async function toBrowserWebSocketUrl(endpoint: string): Promise<string> {
   return ws.toString();
 }
 
+/**
+ * Whether /json/version answers with a WebSocket URL. The remote-debugging
+ * toggle answers 200 with an empty body (or 404), which is not discovery.
+ */
 async function hasDiscovery(endpoint: string): Promise<boolean> {
   try {
     const res = await fetch(new URL('/json/version', endpoint), {
       signal: AbortSignal.timeout(2000),
     });
-    return res.ok;
+    if (!res.ok) {
+      return false;
+    }
+    const body = (await res.json()) as { webSocketDebuggerUrl?: unknown };
+    return typeof body?.webSocketDebuggerUrl === 'string';
   } catch {
     return false;
   }
+}
+
+function noDiscoveryMessage(endpoint: string): string {
+  const port = new URL(endpoint).port;
+  return (
+    `${endpoint} has no CDP discovery (/json/version gave no WebSocket URL). ` +
+    `Chrome's or Brave's "Allow remote debugging for this browser instance" toggle (chrome://inspect/#remote-debugging) ` +
+    `serves only the browser WebSocket, and Squire found no DevToolsActivePort file${port ? ` for port ${port}` : ''} in the usual profile directories. ` +
+    `Pass the WebSocket form instead: cdpEndpoint "ws://127.0.0.1:<port>/devtools/browser/<id>", ` +
+    `where line 1 of the browser's DevToolsActivePort file is the port and line 2 the /devtools/browser/<id> path ` +
+    `(Linux: ~/.config/<google-chrome|BraveSoftware/Brave-Browser|chromium>/DevToolsActivePort), ` +
+    `or set APPIUM_MCP_CHROME_PROFILE_DIR to the profile directory.`
+  );
 }
 
 /** `host:port` without a scheme (as herdr hands it out) means http. */
