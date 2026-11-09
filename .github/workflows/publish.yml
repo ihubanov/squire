@@ -48,9 +48,9 @@ jobs:
       - name: Publish to the MCP Registry
         continue-on-error: true
         run: |
-          # npm can take minutes to serve a new version; the registry checks for it.
+          # npm processing delays have run to ~14 minutes; allow 30.
           v=$(node -p "require('./package.json').version")
-          for i in $(seq 1 60); do npm view "@sniffski/squire@$v" version >/dev/null 2>&1 && break; sleep 10; done
+          for i in $(seq 1 180); do npm view "@sniffski/squire@$v" version >/dev/null 2>&1 && break; sleep 10; done
           curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
           ./mcp-publisher login github-oidc
           ./mcp-publisher publish
