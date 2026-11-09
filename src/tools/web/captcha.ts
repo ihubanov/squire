@@ -29,12 +29,14 @@ export default function captcha(server: FastMCP): void {
   const schema = z.object({
     dial: z
       .string()
-      .describe('CSS selector of the dial body, e.g. ".roulette" or "#dial".'),
+      .describe(
+        'CSS selector of the dial body of a rotate-the-disc captcha (rotation dial / radial slider — the only captcha type this tool solves): the disc or its rotation track, e.g. "#dial" or ".rotation-disc".'
+      ),
     handle: z
       .string()
       .optional()
       .describe(
-        'CSS selector of the knob to grab, e.g. ".roulette-handle". Its current bearing gives the start angle and its box centre the press point. Omit it when the knob is not an element (a range-input thumb, a canvas sprite) and let angleScript return startAngle/radius/grab instead. Its box alone is wrong for a range thumb: that box spans the whole track. Also drop it when a cursor-hotspot knob on screen has no computable cursor — a `<input type=range>` thumb with `cursor: auto` reports nothing, so derive the grab from the control value instead.'
+        'CSS selector of the knob riding the disc rim, e.g. "#handle". Its current bearing gives the start angle and its box centre the press point. Omit it when the knob is not an element (a range-input thumb, a canvas sprite) and let angleScript return startAngle/radius/grab instead. Its box alone is wrong for a range thumb: that box spans the whole track. Also drop it when a cursor-hotspot knob on screen has no computable cursor — a `<input type=range>` thumb with `cursor: auto` reports nothing, so derive the grab from the control value instead.'
       ),
     angleScript: z
       .string()

@@ -27,7 +27,7 @@
 /plugin marketplace add ihubanov/squire
 /plugin install squire@squire
 ```
-This installs the web-driving, presenting and android-driving skills, the `browser-driver` and `presenter` subagents, the cleanup hook, **and** the MCP server (via `npx @sniffski/squire`). Restart the session afterwards.
+This installs the web-driving, captcha-dial, presenting and android-driving skills, the `browser-driver` and `presenter` subagents, the cleanup hook, **and** the MCP server (via `npx @sniffski/squire`). Restart the session afterwards.
 
 ### As a plain MCP server
 ```bash
