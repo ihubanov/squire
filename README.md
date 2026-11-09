@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![npm](https://img.shields.io/npm/v/@sniffski/squire.svg)](https://www.npmjs.com/package/@sniffski/squire)
 
-**Squire** is a Model Context Protocol (MCP) server that gives AI agents hands on real browsers and phones. It drives web pages through Playwright the way a person would: logging in, filling forms, clicking through flows and reading what comes back. It can attach to the Chrome you already have open, with your logins, instead of a throwaway browser. It can also walk *you* through a site with an on-screen guided tour. Android and iOS apps are driven through Appium.
+**Squire** is a Model Context Protocol (MCP) server that gives AI agents hands on real browsers and phones. It drives web pages through Playwright the way a person would: logging in, filling forms, clicking through flows and reading what comes back. It can attach to the Chrome you already have open, with your logins, instead of a throwaway browser. It can also walk _you_ through a site with an on-screen guided tour. Android and iOS apps are driven through Appium.
 
 > Squire grew out of [appium-mcp](https://github.com/appium/appium-mcp) and still ships its Appium mobile tools. It is an independent project, **not affiliated with the Appium project**.
 
@@ -23,16 +23,20 @@
 ## Install
 
 ### As a Claude Code plugin (recommended — one step)
+
 ```
 /plugin marketplace add ihubanov/squire
 /plugin install squire@squire
 ```
+
 This installs the web-driving, captcha-dial, presenting and android-driving skills, the `browser-driver` and `presenter` subagents, the cleanup hook, **and** the MCP server (via `npx @sniffski/squire`). Restart the session afterwards.
 
 ### As a plain MCP server
+
 ```bash
 npx @sniffski/squire          # stdio MCP server
 ```
+
 Point your MCP client at that command. To attach to a running Chrome, launch Chrome with `--remote-debugging-port=9222`, or turn on "Allow remote debugging for this browser instance" at `chrome://inspect/#remote-debugging`, and set `APPIUM_MCP_CDP_ENDPOINT=http://localhost:9222`. The toggle has no `/json` discovery, so Squire reads the browser's WebSocket URL from `DevToolsActivePort` in the Chrome, Chromium, Brave or Edge profile directory (or `APPIUM_MCP_CHROME_PROFILE_DIR`); if it finds none, pass the `ws://127.0.0.1:<port>/devtools/browser/<id>` form from that file as `cdpEndpoint`, and Chrome asks you to click Allow when Squire connects. Squire holds that one connection and every session shares it, so you are asked once; it closes the connection after 10 minutes with no session (`APPIUM_MCP_CDP_IDLE_MS`). With several Chrome profiles open, tabs are listed by profile and new tabs open in the profile of the tab Squire is working in. One backend can serve several browsers: pass `cdpEndpoint` (`http://host:port`, `host:port` or a `ws://` URL) to `create_session` to attach that session to its own Chrome, overriding the env var. Each browser gets its own shared connection. If that attach fails the call fails instead of opening a separate browser, and a refusal because the user has taken control (403, or herdr's 423 with reason `unheld`) is reported as "Control revoked" and never retried; a 423 with reason `unauthorized` or `unreachable` is reported as a gate configuration problem instead. If an attached browser's connection is cut mid-session, the session's next tool calls also fail with "Control revoked" rather than "no session", until a new session is created.
 
 ## Quick start
@@ -47,18 +51,18 @@ To have Squire work in your own Chrome, turn on remote debugging at `chrome://in
 
 ## Configuration (env)
 
-| Var | Purpose |
-|-----|---------|
-| `APPIUM_MCP_CDP_ENDPOINT` | Attach to a running Chrome (e.g. `http://localhost:9222`). Unset → launches its own detached browser. |
-| `APPIUM_MCP_CDP_ALLOWED_HOSTS` | Hosts a caller may name in `create_session`'s `cdpEndpoint` besides loopback (comma-separated `host` or `host:port`, `*` = any). Default: loopback only. |
-| `APPIUM_MCP_CDP_IDLE_MS` | How long to keep the connection to the user's Chrome after the last session ends (default 600000 = 10 min). Each new connection is a new Allow prompt. |
-| `APPIUM_MCP_CDP_KEEP_CONNECTION` | `0` → disconnect from the user's Chrome as soon as the last session ends. |
-| `APPIUM_MCP_CDP_TRACE` | File to log CDP method names to, for debugging an attach. |
-| `APPIUM_MCP_CHROME_PROFILE_DIR` | Chrome profile directory to read `DevToolsActivePort` from, when it isn't the default Chrome/Chromium one. |
-| `APPIUM_MCP_RESPECT_USER_FOCUS` | `true` to stop the AI acting on the tab the user is looking at (for shared screens). Default off, so you and the AI can work in the same tab. |
-| `APPIUM_MCP_VISION_MODEL` / `APPIUM_MCP_VISION_PYTHON` | Enable the ONNX icon detector (path to the `.onnx` + a Python with `onnxruntime`). OCR text grounding works without them. |
-| `APPIUM_MCP_CAPTCHA` | `1` registers `playwright_captcha_solve`, the rotation-dial loop (off by default while it is new). |
-| `APPIUM_MCP_WATCH` | `1` shows ambient cues while Squire drives a visible browser, at real speed: a cursor gliding to each target, a highlight box, a ripple on click, a caption naming the action and a toast on navigation. Passive — nothing waits for the person. Also cues captcha drags, so the turn is seen rather than jumped. Adds well under a second per action. |
+| Var                                                    | Purpose                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `APPIUM_MCP_CDP_ENDPOINT`                              | Attach to a running Chrome (e.g. `http://localhost:9222`). Unset → launches its own detached browser.                                                                                                                                                                                                                                                  |
+| `APPIUM_MCP_CDP_ALLOWED_HOSTS`                         | Hosts a caller may name in `create_session`'s `cdpEndpoint` besides loopback (comma-separated `host` or `host:port`, `*` = any). Default: loopback only.                                                                                                                                                                                               |
+| `APPIUM_MCP_CDP_IDLE_MS`                               | How long to keep the connection to the user's Chrome after the last session ends (default 600000 = 10 min). Each new connection is a new Allow prompt.                                                                                                                                                                                                 |
+| `APPIUM_MCP_CDP_KEEP_CONNECTION`                       | `0` → disconnect from the user's Chrome as soon as the last session ends.                                                                                                                                                                                                                                                                              |
+| `APPIUM_MCP_CDP_TRACE`                                 | File to log CDP method names to, for debugging an attach.                                                                                                                                                                                                                                                                                              |
+| `APPIUM_MCP_CHROME_PROFILE_DIR`                        | Chrome profile directory to read `DevToolsActivePort` from, when it isn't the default Chrome/Chromium one.                                                                                                                                                                                                                                             |
+| `APPIUM_MCP_RESPECT_USER_FOCUS`                        | `true` to stop the AI acting on the tab the user is looking at (for shared screens). Default off, so you and the AI can work in the same tab.                                                                                                                                                                                                          |
+| `APPIUM_MCP_VISION_MODEL` / `APPIUM_MCP_VISION_PYTHON` | Enable the ONNX icon detector (path to the `.onnx` + a Python with `onnxruntime`). OCR text grounding works without them.                                                                                                                                                                                                                              |
+| `APPIUM_MCP_CAPTCHA`                                   | `1` registers `playwright_captcha_solve`, the rotation-dial loop (off by default while it is new).                                                                                                                                                                                                                                                     |
+| `APPIUM_MCP_WATCH`                                     | `1` shows ambient cues while Squire drives a visible browser, at real speed: a cursor gliding to each target, a highlight box, a ripple on click, a caption naming the action and a toast on navigation. Passive — nothing waits for the person. Also cues captcha drags, so the turn is seen rather than jumped. Adds well under a second per action. |
 
 ## Credits and license
 
