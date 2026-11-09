@@ -357,6 +357,75 @@ describe('playwright_captcha_solve', () => {
     expect(text).toMatch(/capture \d+x\d+/);
   }, 30_000);
 
+  test('hunch is off by default: no hunchGate, no judge call', async () => {
+    await load(DIAL);
+    const savedUrl = process.env.SQUIRE_HUNCH_BACKEND_URL;
+    const savedLegacy = process.env.HUNCH_BACKEND_URL;
+    delete process.env.SQUIRE_HUNCH_BACKEND_URL;
+    delete process.env.HUNCH_BACKEND_URL;
+    try {
+      const res = await execs.playwright_captcha_solve({
+        dial: '#dial',
+        handle: '#handle',
+        angleScript: '(() => 200)()',
+        // A judge that returns a strip, which is the input a hunch gate
+        // would act on. The shipped default must still not look at it.
+        judgeScript: `((arg) => ({
+          ok: Math.abs(arg.angle - 200) < 6,
+          strip: arg.image,
+        }))`,
+        holdMs: 100,
+        settleMs: 150,
+        maxAttempts: 2,
+      });
+      const text = res.content[0].text as string;
+      expect(text).toContain('PASSED');
+      expect(text).not.toMatch(/vision/);
+    } finally {
+      if (savedUrl !== undefined) {
+        process.env.SQUIRE_HUNCH_BACKEND_URL = savedUrl;
+      }
+      if (savedLegacy !== undefined) {
+        process.env.HUNCH_BACKEND_URL = savedLegacy;
+      }
+    }
+  }, 30_000);
+
+  test('hunch runs only when hunchGate is given', async () => {
+    await load(DIAL);
+    const savedUrl = process.env.SQUIRE_HUNCH_BACKEND_URL;
+    const savedLegacy = process.env.HUNCH_BACKEND_URL;
+    delete process.env.SQUIRE_HUNCH_BACKEND_URL;
+    delete process.env.HUNCH_BACKEND_URL;
+    try {
+      const res = await execs.playwright_captcha_solve({
+        dial: '#dial',
+        handle: '#handle',
+        angleScript: '(() => 200)()',
+        judgeScript: `((arg) => ({
+          ok: Math.abs(arg.angle - 200) < 6,
+          strip: arg.image,
+        }))`,
+        hunchGate: 0.5,
+        holdMs: 100,
+        settleMs: 150,
+        maxAttempts: 2,
+      });
+      const text = res.content[0].text as string;
+      // No backend URL in the test env, so the call is skipped but the gate
+      // path is visibly taken and reported as unavailable.
+      expect(text).toContain('PASSED');
+      expect(text).toContain('vision unavailable');
+    } finally {
+      if (savedUrl !== undefined) {
+        process.env.SQUIRE_HUNCH_BACKEND_URL = savedUrl;
+      }
+      if (savedLegacy !== undefined) {
+        process.env.HUNCH_BACKEND_URL = savedLegacy;
+      }
+    }
+  }, 30_000);
+
   test('a knob that is not an element is aimed by bearing from the script', async () => {
     // A range-input thumb has no usable box: the input's box spans the whole
     // track. With no handle selector, the script has to say where the knob is.

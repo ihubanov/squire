@@ -162,7 +162,7 @@ export default function captcha(server: FastMCP): void {
       .max(1)
       .optional()
       .describe(
-        'Lower the local vision judge (hunch) over judgeScript. judgeScript reports where things are; hunch reads a calibrated probability that they are actually aligned, and a crop scoring P below this is a miss however generous the pixel score was. Only ever turns a pass into a miss — never the reverse. Needs SQUIRE_HUNCH_BACKEND_URL (a vLLM serving a vision model with logprobs); without it the gate is inert and the log records "vision unavailable". A-B the gate against plain judgeScript before trusting a threshold.'
+        'Opt in to the local vision judge (hunch) on top of judgeScript — omitted by default, so the shipped path stays score-based. judgeScript reports where things are; hunch reads a calibrated probability that they are actually aligned, and a crop scoring P below this is a miss however generous the pixel score was. Only ever turns a pass into a miss — never the reverse. A live hunch call costs ~40s while the puzzle can expire in ~60s, so it is a gate for careful runs, not the default. Needs SQUIRE_HUNCH_BACKEND_URL (a vLLM serving a vision model with logprobs); without it the gate is inert and the log records "vision unavailable", and SQUIRE_HUNCH=0 disables it outright. A-B the gate against plain judgeScript before trusting a threshold.'
       ),
     hunchQuestion: z
       .string()
