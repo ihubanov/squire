@@ -1,12 +1,14 @@
 {
   "name": "squire",
-  "owner": { "name": "ihubanov" },
+  "owner": {
+    "name": "ihubanov"
+  },
   "plugins": [
     {
       "name": "squire",
       "source": "./plugin",
       "description": "Squire — desktop/browser automation that drives a real browser like a human, alongside you. Web-driving, presenting and android-driving skills, browser-driver + presenter subagents, and browser-close cleanup hook. Pairs with the squire MCP server (mcp__plugin_squire_squire__*). Not affiliated with Appium.",
-      "version": "0.8.2"
+      "version": "0.8.4"
     }
   ]
 }

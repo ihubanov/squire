@@ -15,6 +15,8 @@ import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
 import { arcDrag } from './pointer.js';
+import { judge as hunchJudge } from '../../hunch/client.js';
+import { hunchEnabled } from '../../hunch/sidecar.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -148,6 +150,20 @@ export default function captcha(server: FastMCP): void {
       .describe(
         "JS run in the main frame; returns a stable string that names the current challenge (a session token in a hidden field, an image src). Read before the drag and again before judging: a picture replaced mid-attempt makes the screenshot meaningless, so the score is skipped and the attempt counts as a miss. Use a value that outlives image fetches — a per-image URL is replaced by the widget's own refresh, not by this."
       ),
+    hunchGate: z
+      .number()
+      .min(0)
+      .max(1)
+      .optional()
+      .describe(
+        'Lower the local vision judge (hunch) over judgeScript. judgeScript reports where things are; hunch reads a calibrated probability that they are actually aligned, and a crop scoring P below this is a miss however generous the pixel score was. Only ever turns a pass into a miss — never the reverse. Needs SQUIRE_HUNCH_BACKEND_URL (a vLLM serving a vision model with logprobs); without it the gate is inert and the log records "vision unavailable". A-B the gate against plain judgeScript before trusting a threshold.'
+      ),
+    hunchQuestion: z
+      .string()
+      .optional()
+      .describe(
+        'Yes/no question hunch is asked about the crop. Default: "Is the dark seam line in the middle of the dial perfectly aligned with the notch at the top?" Rephrase it for other widgets.'
+      ),
   });
 
   server.addTool({
@@ -261,7 +277,7 @@ export default function captcha(server: FastMCP): void {
           | undefined,
         angle: number,
         attempt: number
-      ): Promise<{ ok: boolean; note: string; score?: number }> => {
+      ): Promise<{ ok: boolean; note: string; score?: number; strip?: string }> => {
         if (!args.judgeScript) {
           return { ok: true, note: '' };
         }
@@ -298,6 +314,7 @@ export default function captcha(server: FastMCP): void {
             ok: verdict >= passScore,
             note: `score ${verdict.toFixed(3)} (pass ≥ ${passScore})`,
             score: verdict,
+            strip: image,
           };
         }
         if (verdict && typeof verdict === 'object') {
@@ -319,11 +336,13 @@ export default function captcha(server: FastMCP): void {
               .filter(Boolean)
               .join(' — '),
             score: typeof v.score === 'number' ? v.score : undefined,
+            strip: image,
           };
         }
         return {
           ok: Boolean(verdict),
           note: `judge ${JSON.stringify(verdict)}`,
+          strip: image,
         };
       };
 
@@ -605,7 +624,12 @@ export default function captcha(server: FastMCP): void {
 
           const captureBox = args.capture ? await box(args.capture) : dialBox;
           await sleep(hold);
-          const verdict: { ok: boolean; note: string; score?: number } =
+          const verdict: {
+            ok: boolean;
+            note: string;
+            score?: number;
+            strip?: string;
+          } =
             replaced
               ? { ok: false, note: 'picture replaced mid-attempt' }
               : await judged(
@@ -617,6 +641,48 @@ export default function captcha(server: FastMCP): void {
                 );
           if (typeof verdict.score === 'number') {
             scores.push(verdict.score);
+          }
+          // Second, independent opinion on the same crop. judgeScript says
+          // where the parts are; hunch says whether they line up, with a
+          // number that means the same thing on every picture. It may only
+          // veto a pass, never manufacture one, and a hunch failure is
+          // "unknown" — the judgeScript verdict stands.
+          if (args.hunchGate !== undefined && verdict.strip && verdict.ok) {
+            if (!hunchEnabled()) {
+              verdict.note = [verdict.note, 'vision unavailable']
+                .filter(Boolean)
+                .join(' — ');
+            } else {
+              const v = await hunchJudge({
+                images: [verdict.strip],
+                checks: {
+                  seam: {
+                    kind: 'yesno',
+                    question:
+                      args.hunchQuestion ??
+                      'Is the dark seam line in the middle of the dial perfectly aligned with the notch at the top?',
+                  },
+                },
+              });
+              const p = v.ok ? v.results.seam?.p_yes : undefined;
+              if (p === undefined) {
+                verdict.note = [verdict.note, 'vision unavailable']
+                  .filter(Boolean)
+                  .join(' — ');
+              } else {
+                const gate = args.hunchGate;
+                const vetoed = verdict.ok && p < gate;
+                verdict.note = [
+                  verdict.note,
+                  `vision ${p.toFixed(2)} (gate ${gate})${vetoed ? ' — vetoed' : ''}`,
+                ]
+                  .filter(Boolean)
+                  .join(' — ');
+                if (vetoed) {
+                  verdict.ok = false;
+                }
+              }
+            }
           }
           const token = await tokenPassed();
           // The token is authoritative when it exists; a picture score that
