@@ -98,7 +98,10 @@ export async function ensureHunch(): Promise<HunchHandle | null> {
   starting = (async () => {
     try {
       await ensureInstalled();
-      const port = await findFreePort(0); // 0 → any free port; never assume 8791
+      // Non-zero base: findFreePort(0) would probe port 0 and return it, and
+      // nothing listens there. Start just above the stock hunch default so we
+      // never assume 8791 itself is available, and walk up from there.
+      const port = await findFreePort(8792);
       const baseUrl = `http://127.0.0.1:${port}`;
       const env = {
         ...process.env,
@@ -106,7 +109,9 @@ export async function ensureHunch(): Promise<HunchHandle | null> {
         HUNCH_PORT: String(port),
         HUNCH_BACKEND_URL: backendUrl()!,
         HUNCH_BACKEND_MODEL: backendModel(),
-        HUNCH_DEFAULT_MODEL: backendModel(),
+        // No HUNCH_DEFAULT_MODEL: hunch names the synthesized model "default"
+        // and falls back to its first model, so pinning the name here would
+        // raise "not one of the configured models" if a hunch.toml supplies one.
         HUNCH_ALLOW_NOAUTH: '1', // localhost-only
         ...(backendKey() ? { HUNCH_BACKEND_KEY: backendKey()! } : {}),
       };

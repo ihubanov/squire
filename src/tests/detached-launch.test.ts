@@ -58,6 +58,13 @@ describe('free-port', () => {
     expect(await findFreePort(port)).toBe(port);
   });
 
+  test('findFreePort with a non-zero base yields a usable port, not 0', async () => {
+    // Regression: findFreePort(0) returns 0, which nothing listens on.
+    const chosen = await findFreePort(8792);
+    expect(chosen).toBeGreaterThanOrEqual(8792);
+    expect(await isPortFree(chosen)).toBe(true);
+  });
+
   test('findFreePort walks past an occupied preferred port', async () => {
     const { port, close } = await occupyPort();
     try {

@@ -26,6 +26,9 @@ export function isPortFree(port: number, host = '127.0.0.1'): Promise<boolean> {
  * Return `preferred` if free, otherwise the next free port above it
  * (up to `maxTries` candidates). Falls back to an OS-assigned ephemeral
  * port if the whole range is occupied.
+ *
+ * `preferred` must be non-zero: isPortFree(0) binds an ephemeral port and
+ * reports it free, so findFreePort(0) returns 0 — not the port it bound.
  */
 export async function findFreePort(
   preferred: number,
