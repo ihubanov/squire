@@ -3,12 +3,12 @@
   "name": "io.github.ihubanov/squire",
   "title": "MCP Appium - Mobile Development and Automation Server",
   "description": "MCP server for Appium mobile automation on iOS and Android devices with test creation tools.",
-  "version": "1.34.3",
+  "version": "1.34.4",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@sniffski/squire",
-      "version": "1.34.3",
+      "version": "1.34.4",
       "transport": {
         "type": "stdio"
       }
