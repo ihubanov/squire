@@ -1,5 +1,9 @@
 /**
- * Captcha solve loop for rotation dials, behind APPIUM_MCP_CAPTCHA.
+ * Captcha solve loop for one captcha type: the rotation dial (a.k.a.
+ * rotate-the-disc / radial slider). Behind APPIUM_MCP_CAPTCHA.
+ *
+ * Written against the captcha *type*, not one site: everything is selector-
+ * and script-driven, so the same tool serves any widget of this kind.
  *
  * Squire cannot see the picture, so the caller supplies the judgement — a
  * script that names the next angle, and (better) a script that scores the
@@ -169,7 +173,7 @@ export default function captcha(server: FastMCP): void {
   server.addTool({
     name: 'playwright_captcha_solve',
     description:
-      'Solve a rotation-dial captcha by dragging it round. Repeats: read the next angle from angleScript, drag the knob there with real pointer moves, screenshot the widget and score it with judgeScript (and/or check successScript), re-show and refresh, then stop when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
+      'Solve a rotation-dial (rotate-the-disc / radial slider) captcha by dragging it round. Repeats: read the next angle from angleScript, drag the knob there with real pointer moves, screenshot the widget and score it with judgeScript (and/or check successScript), re-show and refresh, then stop when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
     parameters: schema,
     annotations: { readOnlyHint: false, openWorldHint: false },
     execute: async (args: z.infer<typeof schema>): Promise<ContentResult> => {
@@ -277,7 +281,12 @@ export default function captcha(server: FastMCP): void {
           | undefined,
         angle: number,
         attempt: number
-      ): Promise<{ ok: boolean; note: string; score?: number; strip?: string }> => {
+      ): Promise<{
+        ok: boolean;
+        note: string;
+        score?: number;
+        strip?: string;
+      }> => {
         if (!args.judgeScript) {
           return { ok: true, note: '' };
         }
@@ -629,16 +638,15 @@ export default function captcha(server: FastMCP): void {
             note: string;
             score?: number;
             strip?: string;
-          } =
-            replaced
-              ? { ok: false, note: 'picture replaced mid-attempt' }
-              : await judged(
-                  captureBox,
-                  dialBox,
-                  handleBox,
-                  moved.angle,
-                  attempt
-                );
+          } = replaced
+            ? { ok: false, note: 'picture replaced mid-attempt' }
+            : await judged(
+                captureBox,
+                dialBox,
+                handleBox,
+                moved.angle,
+                attempt
+              );
           if (typeof verdict.score === 'number') {
             scores.push(verdict.score);
           }

@@ -1,19 +1,19 @@
 /**
- * Bundled hunch sidecar — Squire's calibrated P(yes) judge.
+ * Bundled hunch — Squire's calibrated P(yes) judge.
  *
- * hunch (github.com/ihubanov/hunch) is a thin Python/FastAPI service that reads
- * the probability of a constrained answer token off a vLLM's logprobs, giving a
- * *calibrated* yes/no / pick / scale. Squire bundles it as a managed sidecar so
- * verification and vision-grounding get a real confidence number instead of the
- * driving LLM's self-assessment.
+ * hunch (github.com/ihubanov/hunch) reads the probability of a constrained
+ * answer token off a vLLM's logprobs, giving a *calibrated* yes/no / pick /
+ * scale. Squire bundles it so verification and vision-grounding get a real
+ * confidence number instead of the driving LLM's self-assessment.
  *
  * Design decisions (per the product requirements):
+ *  - LIBRARY MODE, NO SERVER: driven as `python -m hunch judge -` — one JSON
+ *    request on stdin, one JSON result on stdout. No HTTP, so nothing has to
+ *    pick, reserve or poll a TCP port.
  *  - LATEST, auto-updating: installed from git@main into a dedicated venv, and
  *    upgraded on a daily cadence so it tracks the hunch repo without reinstalling
- *    every session.
- *  - Never fights another hunch on the host: it listens on a FREE port picked at
- *    spawn (the stock hunch default is 8791; we never assume it), and installs
- *    under an exclusive lock so concurrent Squire sessions don't corrupt the venv.
+ *    every session. Installs under an exclusive lock so concurrent Squire
+ *    sessions don't corrupt the venv.
  *  - Fail-closed and optional: dormant unless a backend vLLM is configured
  *    (SQUIRE_HUNCH_BACKEND_URL / HUNCH_BACKEND_URL); errors never fabricate a
  *    probability — callers treat them as "unknown", never "no".
@@ -28,7 +28,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { findFreePort } from '../free-port.js';
 import log from '../logger.js';
 
 const execFileP = promisify(execFile);
@@ -48,13 +47,8 @@ const INSTALL_LOCK = path.join(os.tmpdir(), 'squire-hunch-install.lock');
 const UPGRADE_MARKER = path.join(VENV_DIR, '.last-upgrade');
 const UPGRADE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
-export interface HunchHandle {
-  baseUrl: string;
-  proc: ChildProcess;
-}
-
-let handle: HunchHandle | null = null;
-let starting: Promise<HunchHandle | null> | null = null;
+/** Live judge child, so shutdown can kill an in-flight call. */
+let current: ChildProcess | null = null;
 
 /** hunch is usable only when explicitly enabled AND a backend vLLM is configured. */
 export function hunchEnabled(): boolean {
@@ -80,88 +74,105 @@ function backendKey(): string | undefined {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+export interface JudgeReply {
+  results?: Record<string, unknown>;
+  usage?: unknown;
+  error?: { code?: string; message?: string };
+}
+
 /**
- * Start (or reuse) the bundled hunch sidecar and return its base URL, or null
- * when hunch is disabled/unconfigured. Idempotent and concurrency-safe.
+ * Run one hunch judge request. Resolves with the parsed reply (which may carry
+ * `error`) or null when hunch is disabled / the child could not run at all.
  */
-export async function ensureHunch(): Promise<HunchHandle | null> {
+export async function runJudge(
+  body: Record<string, unknown>,
+  timeoutMs = 30_000
+): Promise<JudgeReply | null> {
   if (!hunchEnabled()) {
     return null;
   }
-  if (handle && !handle.proc.killed) {
-    return handle;
-  }
-  if (starting) {
-    return starting;
+  if (!(await ensureInstalled())) {
+    return null;
   }
 
-  starting = (async () => {
-    try {
-      await ensureInstalled();
-      // Non-zero base: findFreePort(0) would probe port 0 and return it, and
-      // nothing listens there. Start just above the stock hunch default so we
-      // never assume 8791 itself is available, and walk up from there.
-      const port = await findFreePort(8792);
-      const baseUrl = `http://127.0.0.1:${port}`;
-      const env = {
-        ...process.env,
-        HUNCH_HOST: '127.0.0.1',
-        HUNCH_PORT: String(port),
-        HUNCH_BACKEND_URL: backendUrl()!,
-        HUNCH_BACKEND_MODEL: backendModel(),
-        // No HUNCH_DEFAULT_MODEL: hunch names the synthesized model "default"
-        // and falls back to its first model, so pinning the name here would
-        // raise "not one of the configured models" if a hunch.toml supplies one.
-        HUNCH_ALLOW_NOAUTH: '1', // localhost-only
-        ...(backendKey() ? { HUNCH_BACKEND_KEY: backendKey()! } : {}),
-      };
-      const proc = spawn(VENV_PY, ['-m', 'hunch'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env,
-      });
-      proc.unref?.();
-      proc.on('error', (e) => log.error(`[hunch] spawn failed: ${e.message}`));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HUNCH_BACKEND_URL: backendUrl()!,
+    HUNCH_BACKEND_MODEL: backendModel(),
+    // Skip the per-spawn mode probe: we always drive the same judge path.
+    HUNCH_MODE: 'one_token',
+    ...(backendKey() ? { HUNCH_BACKEND_KEY: backendKey()! } : {}),
+  };
 
-      // Wait for the HTTP server to accept connections (models load / backend
-      // probe can make /health 503 briefly; a reachable socket is enough to use).
-      for (let i = 0; i < 30; i++) {
-        try {
-          await fetch(`${baseUrl}/v1/models`, {
-            signal: AbortSignal.timeout(1500),
-          });
-          break;
-        } catch {
-          if (proc.killed || proc.exitCode != null) {
-            throw new Error('hunch exited during startup');
-          }
-          await sleep(500);
-        }
+  return new Promise((resolve) => {
+    const proc = spawn(VENV_PY, ['-m', 'hunch', 'judge', '-'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env,
+    });
+    current = proc;
+    let out = '';
+    let err = '';
+    let done = false;
+
+    const finish = (reply: JudgeReply | null) => {
+      if (done) {
+        return;
       }
-      handle = { baseUrl, proc };
-      log.info(
-        `[hunch] sidecar up at ${baseUrl} (backend ${backendUrl()}, healthy=${await healthy(baseUrl)})`
-      );
-      return handle;
-    } catch (e) {
-      log.error(`[hunch] could not start sidecar: ${(e as Error).message}`);
-      return null;
-    } finally {
-      starting = null;
-    }
-  })();
-  return starting;
+      done = true;
+      clearTimeout(timer);
+      current = null;
+      resolve(reply);
+    };
+
+    const timer = setTimeout(() => {
+      try {
+        proc.kill('SIGKILL');
+      } catch {
+        /* ignore */
+      }
+      finish({ error: { code: 'timeout', message: `judge timed out` } });
+    }, timeoutMs);
+
+    proc.stdout!.setEncoding('utf8');
+    proc.stderr!.setEncoding('utf8');
+    proc.stdout!.on('data', (d: string) => (out += d));
+    proc.stderr!.on('data', (d: string) => (err += d));
+    proc.on('error', (e) => {
+      log.error(`[hunch] spawn failed: ${e.message}`);
+      finish(null);
+    });
+    proc.on('close', () => {
+      const text = out.trim();
+      if (!text) {
+        log.error(`[hunch] empty reply${err ? `: ${err.trim()}` : ''}`);
+        finish({ error: { message: err.trim() || 'empty reply' } });
+        return;
+      }
+      try {
+        finish(JSON.parse(text.split('\n').pop()!) as JudgeReply);
+      } catch {
+        log.error(`[hunch] unparseable reply: ${text.slice(0, 200)}`);
+        finish({ error: { message: 'unparseable reply' } });
+      }
+    });
+
+    proc.stdin!.on('error', () => {
+      /* EPIPE if the child exits early; reported via close */
+    });
+    proc.stdin!.end(JSON.stringify(body));
+  });
 }
 
-/** Stop the sidecar (called on server shutdown). */
+/** Kill an in-flight judge (called on server shutdown). */
 export function stopHunch(): void {
-  if (handle?.proc && !handle.proc.killed) {
+  if (current && !current.killed) {
     try {
-      handle.proc.kill('SIGTERM');
+      current.kill('SIGTERM');
     } catch {
       /* ignore */
     }
   }
-  handle = null;
+  current = null;
 }
 
 /** Acquire a crude cross-process lock so two Squire sessions don't pip-install at once. */
@@ -199,7 +210,7 @@ async function withInstallLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Ensure the venv exists with an up-to-date (latest) hunch. */
-async function ensureInstalled(): Promise<void> {
+async function ensureInstalled(): Promise<boolean> {
   const py = process.env.SQUIRE_HUNCH_PYTHON ?? 'python3';
   const haveVenv = fs.existsSync(VENV_PY);
   const dueForUpgrade = (() => {
@@ -212,49 +223,44 @@ async function ensureInstalled(): Promise<void> {
     }
   })();
   if (haveVenv && !dueForUpgrade) {
-    return;
+    return true;
   }
 
-  await withInstallLock(async () => {
-    // Re-check inside the lock — another session may have just done it.
-    if (fs.existsSync(VENV_PY)) {
-      try {
-        if (
-          Date.now() - fs.statSync(UPGRADE_MARKER).mtimeMs <=
-          UPGRADE_INTERVAL_MS
-        ) {
-          return;
-        }
-      } catch {
-        /* fall through to upgrade */
-      }
-    } else {
-      log.info(`Creating hunch venv at ${VENV_DIR}`);
-      await execFileP(py, ['-m', 'venv', VENV_DIR]);
-    }
-    log.info('Installing/upgrading bundled hunch to latest (git@main)…');
-    await execFileP(
-      VENV_PY,
-      ['-m', 'pip', 'install', '--quiet', '--upgrade', GIT_SPEC],
-      {
-        timeout: 240_000,
-      }
-    );
-    try {
-      fs.writeFileSync(UPGRADE_MARKER, new Date().toISOString());
-    } catch {
-      /* ignore */
-    }
-  });
-}
-
-async function healthy(baseUrl: string): Promise<boolean> {
   try {
-    const r = await fetch(`${baseUrl}/health`, {
-      signal: AbortSignal.timeout(2000),
+    await withInstallLock(async () => {
+      // Re-check inside the lock — another session may have just done it.
+      if (fs.existsSync(VENV_PY)) {
+        try {
+          if (
+            Date.now() - fs.statSync(UPGRADE_MARKER).mtimeMs <=
+            UPGRADE_INTERVAL_MS
+          ) {
+            return;
+          }
+        } catch {
+          /* fall through to upgrade */
+        }
+      } else {
+        log.info(`Creating hunch venv at ${VENV_DIR}`);
+        await execFileP(py, ['-m', 'venv', VENV_DIR]);
+      }
+      log.info('Installing/upgrading bundled hunch to latest (git@main)…');
+      await execFileP(
+        VENV_PY,
+        ['-m', 'pip', 'install', '--quiet', '--upgrade', GIT_SPEC],
+        {
+          timeout: 240_000,
+        }
+      );
+      try {
+        fs.writeFileSync(UPGRADE_MARKER, new Date().toISOString());
+      } catch {
+        /* ignore */
+      }
     });
-    return r.ok; // 200 once the backend vLLM is reachable; 503 while it isn't
-  } catch {
+    return true;
+  } catch (e) {
+    log.error(`[hunch] install failed: ${(e as Error).message}`);
     return false;
   }
 }

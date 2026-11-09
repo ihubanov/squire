@@ -1,12 +1,12 @@
 /**
  * Client for the bundled hunch sidecar.
  *
- * Wraps POST /v1/judge. Everything is fail-closed: any transport/HTTP error
+ * Wraps the hunch library entry (`judge -` over stdio). Everything is fail-closed: any transport error
  * returns { ok: false } with a reason, and callers MUST treat that as "unknown"
  * — never as "no". A hunch verdict is a signal, not a gate on destructive
  * actions (screenshots can carry adversarial text).
  */
-import { ensureHunch, hunchEnabled } from './sidecar.js';
+import { runJudge, hunchEnabled } from './sidecar.js';
 import log from '../logger.js';
 
 export type Check =
@@ -55,11 +55,6 @@ export async function judge(opts: {
         'hunch disabled or no backend configured (set SQUIRE_HUNCH_BACKEND_URL)',
     };
   }
-  const h = await ensureHunch();
-  if (!h) {
-    return { ok: false, reason: 'hunch sidecar unavailable' };
-  }
-
   const body: Record<string, unknown> = { checks: opts.checks };
   if (opts.images?.length) {
     body.images = opts.images;
@@ -74,25 +69,21 @@ export async function judge(opts: {
     body.effort = opts.effort;
   }
 
-  try {
-    const r = await fetch(`${h.baseUrl}/v1/judge`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
-    });
-    if (!r.ok) {
-      // 502/503 = backend down: fail closed, this is "unknown".
-      return { ok: false, reason: `hunch ${r.status}` };
-    }
-    const data = (await r.json()) as {
-      results?: JudgeOk['results'];
-      usage?: unknown;
-    };
-    return { ok: true, results: data.results ?? {}, usage: data.usage };
-  } catch (e) {
-    return { ok: false, reason: (e as Error).message };
+  const data = await runJudge(body, opts.timeoutMs ?? 30_000);
+  if (!data) {
+    return { ok: false, reason: 'hunch unavailable' };
   }
+  if (data.error) {
+    return {
+      ok: false,
+      reason: data.error.message ?? data.error.code ?? 'hunch error',
+    };
+  }
+  return {
+    ok: true,
+    results: (data.results ?? {}) as JudgeOk['results'],
+    usage: data.usage,
+  };
 }
 
 /**
