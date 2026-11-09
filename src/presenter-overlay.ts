@@ -668,10 +668,13 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     }
     if (!touring) {
       clearTimeout(state.cueT);
-      state.cueT = setTimeout(() => {
-        spot.classList.remove('on');
-        cursor.classList.remove('on');
-      }, (o && o.ms) || 1200);
+      state.cueT = setTimeout(
+        () => {
+          spot.classList.remove('on');
+          cursor.classList.remove('on');
+        },
+        (o && o.ms) || 1200
+      );
     }
     return true;
   };

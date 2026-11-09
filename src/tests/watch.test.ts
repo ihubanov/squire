@@ -30,6 +30,7 @@ beforeAll(async () => {
 }, 60_000);
 
 afterAll(async () => {
+  delete process.env.APPIUM_MCP_WATCH;
   await browser?.close();
   await new Promise<void>((r) => server.close(() => r()));
 });

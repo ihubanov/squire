@@ -433,7 +433,8 @@ async function runActionable(
     throw new Error(`Step "${step.action}" requires a selector`);
   }
   const locator = page.locator(sel).first();
-  const kind = step.action === 'click' || step.action === 'hover' ? step.action : 'input';
+  const kind =
+    step.action === 'click' || step.action === 'hover' ? step.action : 'input';
   await cueAt(page, locator, kind);
 
   const normal = async (): Promise<void> => {

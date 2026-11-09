@@ -56,10 +56,12 @@ async function cue(
   await withTimeout(
     (async () => {
       await page.evaluate(installPresenter, { ambient: true });
-      await page.evaluate(
-        (o) => (window as any).__squirePresenter?.cue(o),
-        { rect, click: kind === 'click', ms: CUE_MS[kind], text }
-      );
+      await page.evaluate((o) => (window as any).__squirePresenter?.cue(o), {
+        rect,
+        click: kind === 'click',
+        ms: CUE_MS[kind],
+        text,
+      });
     })(),
     1500
   );
