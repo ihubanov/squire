@@ -635,11 +635,16 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
    * then fade. Purely passive — no caption, no dimming, no frame loop.
    */
   api.cue = (o: any) => {
-    wrap.classList.add('ambient');
-    bubble.classList.remove('on');
-    ring.classList.remove('on');
-    state.active = false;
-    cancelAnimationFrame(state.raf);
+    // A live tour keeps its caption and spotlight; a cue only adds the
+    // cursor there. Otherwise the cue owns the overlay.
+    const touring = state.active && bubble.classList.contains('on');
+    if (!touring) {
+      wrap.classList.add('ambient');
+      bubble.classList.remove('on');
+      ring.classList.remove('on');
+      state.active = false;
+      cancelAnimationFrame(state.raf);
+    }
     const r = o && o.rect;
     if (o && o.text) {
       api.toast(o.text);
@@ -648,22 +653,26 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
       const pad = 6;
       const cx = r.x + r.w / 2;
       const cy = r.y + r.h / 2;
-      spot.classList.remove('notarget');
-      spot.classList.add('on');
-      spot.style.left = `${r.x - pad}px`;
-      spot.style.top = `${r.y - pad}px`;
-      spot.style.width = `${r.w + pad * 2}px`;
-      spot.style.height = `${r.h + pad * 2}px`;
+      if (!touring) {
+        spot.classList.remove('notarget');
+        spot.classList.add('on');
+        spot.style.left = `${r.x - pad}px`;
+        spot.style.top = `${r.y - pad}px`;
+        spot.style.width = `${r.w + pad * 2}px`;
+        spot.style.height = `${r.h + pad * 2}px`;
+      }
       api.moveCursor(cx, cy, 240);
       if (o.click) {
         api.ripple(cx, cy);
       }
     }
-    clearTimeout(state.cueT);
-    state.cueT = setTimeout(() => {
-      spot.classList.remove('on');
-      cursor.classList.remove('on');
-    }, (o && o.ms) || 1200);
+    if (!touring) {
+      clearTimeout(state.cueT);
+      state.cueT = setTimeout(() => {
+        spot.classList.remove('on');
+        cursor.classList.remove('on');
+      }, (o && o.ms) || 1200);
+    }
     return true;
   };
 
