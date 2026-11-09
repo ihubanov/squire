@@ -491,6 +491,29 @@ export default function captcha(server: FastMCP): void {
                   // way.
                   { x: dialBox.x + next.grab.x, y: dialBox.y + next.grab.y }
                 : undefined;
+            // A track is driven by values, not bearings: on a range input a
+            // bearing from the grab point means nothing, so an absent
+            // startAngle starts from the control's own lower bound instead
+            // (the press snaps the thumb there, and the drag still ends on
+            // the target).
+            const trackGiven =
+              next.track &&
+              [
+                next.track.x1,
+                next.track.y1,
+                next.track.x2,
+                next.track.y2,
+              ].every((n) => typeof n === 'number');
+            if (trackGiven && startAngle === undefined) {
+              if (typeof next.min === 'number') {
+                startAngle = next.min;
+              } else {
+                startAngle = 0;
+                log.push(
+                  `attempt ${attempt}: track without startAngle or min — starting the drag at 0`
+                );
+              }
+            }
             if (grab && startAngle === undefined) {
               startAngle = bearing(grab);
             }
