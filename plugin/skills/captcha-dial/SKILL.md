@@ -208,8 +208,9 @@ Exit code 0 only on `status:"pass"` with the revealed content present.
 
 - The thin-ring peak on the live rotation dial is broad; `corr` around 0.5 is
   normal and `confidence` can look low. Do not gate a rotation dial on
-  `confidence`; gate on variant spread and peak instead (agreement within ~2°
-  and peak ≥ ~0.7 is worth the drag, a 25° scatter at peak ~0.46 is not).
+  `confidence`; gate on variant spread instead — agreement within ~2° is worth
+  the drag even at a low peak (a 25° scatter at peak ~0.46 is not, and a
+  genuine live seam peaks only ~0.42, so a 0.7 peak floor vetoes everything).
   `dial/angle.js` in the web-driving skill computes exactly that gate.
 - `compute` assumes the images are same-origin or `data:` (they are here);
   a canvas-tainted cross-origin image will throw.

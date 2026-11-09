@@ -148,7 +148,7 @@ export default function captcha(server: FastMCP): void {
       .max(1)
       .optional()
       .describe(
-        'Gate on the confidence angleScript reports. Below it, the challenge is refreshed rather than dragged: an adversarial puzzle whose fit is a coin toss is a burnt attempt, and a fresh picture is cheaper. Bimodal fits are the case — when candidate answers agree and peak clearly, the drag is worth making; when they scatter on a flat band, it is not. Costs one attempt per refresh, and does nothing without `refresh` (the drag proceeds; only the log records the low value).'
+        'Gate on the confidence angleScript reports. Below it, the challenge is refreshed rather than dragged: an adversarial puzzle whose fit is a coin toss is a burnt attempt, and a fresh picture is cheaper. Agreement between candidate answers should drive that number, not peak — on a live widget a genuine fit peaks lower than a hopeless one can, so a peak-only floor vetoes good drags. Around 0.35 is a sensible gate. Costs one attempt per refresh, and does nothing without `refresh` (the drag proceeds; only the log records the low value).'
       ),
     identityScript: z
       .string()

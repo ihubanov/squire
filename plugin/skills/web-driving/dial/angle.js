@@ -167,6 +167,9 @@ async () => {
   const spread = rel[rel.length - 1] - rel[0];
   const fine = (ref + rel[(rel.length - 1) >> 1] + 360) % 360;
   const worstPeak = Math.min(...fits.map((f) => f.best));
+  // Median, not min: live peaks sit near the floor (a genuine seam measured
+  // ~0.42), so one variant dipping low must not zero an otherwise agreeing fit.
+  const midPeak = fits.map((f) => f.best).sort((a, b) => a - b)[1];
   const bestFit = fits.reduce((a, b) => (b.best > a.best ? b : a));
 
   // Distance to the first decoy far enough away to be a different seam: the
@@ -177,11 +180,12 @@ async () => {
     const v = at(Math.round(fine) + d);
     if (v > decoy) decoy = v;
   }
-  // Everything must agree before the peak can vouch for an angle: 6 deg of
-  // spread is already a coin toss, 2 deg or less is worth a drag; a peak
-  // below 0.5 is a flat band whatever the variants say.
+  // Spread carries the decision — 6 deg is already a coin toss, 2 deg or less
+  // is worth a drag — because peak does not separate live pictures (a genuine
+  // live seam peaks ~0.42, a hopeless one ~0.46). Peak only damps, and its
+  // floor sits below the live range so a real seam is never scored out.
   const spreadTerm = Math.max(0, Math.min(1, (6 - spread) / 4));
-  const peakTerm = Math.max(0, Math.min(1, (worstPeak - 0.5) / 0.25));
+  const peakTerm = Math.max(0, Math.min(1, (midPeak - 0.3) / 0.25));
   const confidence = Math.max(0, Math.min(1, spreadTerm * peakTerm));
 
   // Straight track, arc press: the pointer travels an arc of the target's
