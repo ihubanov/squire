@@ -27,7 +27,7 @@ node -p "require('./plugin/.claude-plugin/plugin.json').version"
 node -p "require('./.claude-plugin/marketplace.json').plugins.find(p=>p.name==='squire').version"
 ```
 
-Both must be equal and both must have been bumped for a plugin change. Bump them in the same commit as the release.
+Both must be equal and both must have been bumped for a plugin change. Bump them in the same commit as the release. `claude plugin tag <path> --dry-run` performs exactly this check (and refuses a mismatch) if you want the tool to confirm it.
 
 Then check the tag itself:
 
