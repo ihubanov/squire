@@ -20,6 +20,15 @@ node -p "require('./package.json').version"   # the version you are about to tag
 
 The last command's value and the tag name are the same thing: tag `vX.Y.Z` iff `package.json` says `X.Y.Z`.
 
+The plugin has its own version, and it lives in **two** places that must match: `plugin/.claude-plugin/plugin.json` and the `squire` entry in `.claude-plugin/marketplace.json`. `/plugin` resolves updates from the marketplace entry alone, so a bump that only touches `plugin.json` looks published but every client keeps reporting the old version as "latest". Check them before tagging:
+
+```sh
+node -p "require('./plugin/.claude-plugin/plugin.json').version"
+node -p "require('./.claude-plugin/marketplace.json').plugins.find(p=>p.name==='squire').version"
+```
+
+Both must be equal and both must have been bumped for a plugin change. Bump them in the same commit as the release.
+
 Then check the tag itself:
 
 ```sh
