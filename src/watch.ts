@@ -63,7 +63,10 @@ async function cue(
         text,
       });
     })(),
-    1500
+    // Generous enough that a loaded CI box still finishes the two evaluates
+    // before the cue is dropped, but still bounded so a wedged page can't hang
+    // the tool call.
+    4000
   );
 }
 
@@ -79,13 +82,15 @@ export async function cueAt(
   let rect: Rect | null = null;
   await withTimeout(
     (async () => {
-      await (target as any).scrollIntoViewIfNeeded?.({ timeout: 400 });
-      const b = await (target as any).boundingBox?.({ timeout: 400 });
+      await (target as any).scrollIntoViewIfNeeded?.({ timeout: 1500 });
+      const b = await (target as any).boundingBox?.({ timeout: 1500 });
       if (b) {
         rect = { x: b.x, y: b.y, w: b.width, h: b.height };
       }
     })(),
-    600
+    // A crowded box is slow to answer; a short budget here silently drops the
+    // box and leaves the click unboxed, so give it room.
+    2000
   );
   await cue(page, rect, kind);
 }
