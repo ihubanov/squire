@@ -15,6 +15,7 @@ import { elementUUIDScheme } from '../../schema.js';
 import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
+import { cueText } from '../../watch.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -317,6 +318,7 @@ export default function pointer(server: FastMCP): void {
           delay,
           hold,
           grab,
+          cue: `drag ${startAngleLabel(startAngle)} → ${startAngleLabel(startAngle + delta)}`,
         });
 
         logActivity({
@@ -361,6 +363,8 @@ export interface ArcDrag {
   delay: number;
   hold: number;
   grab?: { x: number; y: number };
+  /** Caption the watch overlay shows for this drag, if anything is watching. */
+  cue?: string;
 }
 
 /**
@@ -374,6 +378,11 @@ export async function arcDrag(
 ): Promise<{ x: number; y: number }> {
   const start = pointOnArc(o.cx, o.cy, o.radius, o.startAngle);
   const pressAt = o.grab ?? start;
+  if (o.cue) {
+    // Caption only, and short-budget: a cue must never outlast the drag's own
+    // step budget.
+    await cueText(page, o.cue, 'input', null, 700);
+  }
   await page.mouse.move(pressAt.x, pressAt.y);
   lastPoint = pressAt;
   await sleep(Math.max(o.delay, 20));

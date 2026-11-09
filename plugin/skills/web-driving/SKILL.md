@@ -160,9 +160,9 @@ Rules that apply to all of them:
 
 ## Watch it happen
 
-With `APPIUM_MCP_WATCH=1` every click, fill, hover and navigation draws a brief cue over the live page: a cursor glides to the target, a box highlights where it lands, a click ripples, and a navigation shows a toast with the destination host. There are no captions and nothing to click — it is purely so a person watching the browser can follow what Squire is doing.
+With `APPIUM_MCP_WATCH=1` every click, fill, hover and navigation draws a brief cue over the live page: a cursor glides to the target, a box highlights where it lands, a click ripples, a navigation shows a toast with the destination host, and a one-line caption names the action. Captcha drags are cued the same way ("set rotation to 212°") so the turn itself is visible rather than a jump. Nothing is clickable and no step waits for the person — it runs over real automation, at real speed, for someone watching the browser.
 
-It adds roughly a quarter second per action and is best-effort: cues on a mid-navigation or unusual page are skipped, never fatal. Use `playwright_present` instead when the person should do the steps themselves or needs explanations.
+It adds well under a second per action (cues in a captcha loop carry a ~0.7 s cap) and is best-effort: cues on a mid-navigation or unusual page are skipped, never fatal. Use `playwright_present` instead when the person should do the steps themselves or needs explanations.
 
 ## Verify, don't assume
 

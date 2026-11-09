@@ -3,9 +3,11 @@
  *
  * When `APPIUM_MCP_WATCH` is on, every click / fill / hover / navigation
  * gets a brief animated cue drawn over the live page: a cursor gliding to
- * the target, a highlight box where the action lands and a ripple on click.
- * No captions, no dimming, no interaction — just enough for the person
- * watching the visible browser to follow along.
+ * the target, a highlight box where the action lands, a ripple on click and
+ * a one-line caption naming the action. No dimming and no interaction — just
+ * enough for the person watching the visible browser to follow along. The
+ * overlay is passive, so cues also run during real automation (a captcha
+ * drag per attempt), not only during a presenter tour.
  *
  * The overlay is presenter-overlay.ts in ambient mode, so the two never
  * fight: a real tour takes over the same overlay and a later cue only
@@ -48,7 +50,8 @@ async function cue(
   page: Page,
   rect: Rect | null,
   kind: CueKind,
-  text?: string
+  text?: string,
+  budgetMs = 4000
 ): Promise<void> {
   if (!watchEnabled() || page.isClosed()) {
     return;
@@ -65,16 +68,24 @@ async function cue(
     })(),
     // Generous enough that a loaded CI box still finishes the two evaluates
     // before the cue is dropped, but still bounded so a wedged page can't hang
-    // the tool call.
-    4000
+    // the tool call. Live automation passes a shorter budget.
+    budgetMs
   );
 }
 
-/** Cue on a DOM target (element or locator). */
+/**
+ * Cue on a DOM target (element or locator), optionally captioned.
+ *
+ * `budgetMs` bounds the whole cue. The default suits a one-shot tool call;
+ * tight loops (a drag per attempt) should pass something small so the overlay
+ * can never become the slowest part of the work.
+ */
 export async function cueAt(
   page: Page,
   target: Locator | ElementHandle,
-  kind: CueKind
+  kind: CueKind,
+  text?: string,
+  budgetMs = 6000
 ): Promise<void> {
   if (!watchEnabled()) {
     return;
@@ -89,10 +100,26 @@ export async function cueAt(
       }
     })(),
     // A crowded box is slow to answer; a short budget here silently drops the
-    // box and leaves the click unboxed, so give it room.
-    2000
+    // box and leaves the click unboxed, so give it room — but stay inside the
+    // caller's budget.
+    Math.min(2000, budgetMs)
   );
-  await cue(page, rect, kind);
+  await cue(page, rect, kind, text, Math.min(4000, budgetMs));
+}
+
+/**
+ * Cue without a DOM target: a caption, optionally near a known box. Used
+ * where the thing being acted on has no element of its own (a canvas, a range
+ * thumb) or where the action is a description rather than a click.
+ */
+export async function cueText(
+  page: Page,
+  text: string,
+  kind: CueKind = 'nav',
+  rect?: Rect | null,
+  budgetMs = 1500
+): Promise<void> {
+  await cue(page, rect ?? null, kind, text, budgetMs);
 }
 
 /** Cue a navigation (no DOM target): a short toast naming the destination. */

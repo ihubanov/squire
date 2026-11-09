@@ -591,6 +591,24 @@ export class Tour {
         .catch(() => {});
     }
     const value = step.value ?? '';
+    // `fill` on input[type=range] waits for a text cursor that never appears
+    // and times out; setting the value and firing the events is what a drag
+    // amounts to.
+    if (
+      action === 'fill' &&
+      handle &&
+      (await handle
+        .evaluate((e: any) => String(e.type).toLowerCase() === 'range')
+        .catch(() => false))
+    ) {
+      await handle.evaluate((e: any, v: string) => {
+        const n = Number(v);
+        e.value = Number.isFinite(n) ? String(n) : v;
+        e.dispatchEvent(new Event('input', { bubbles: true }));
+        e.dispatchEvent(new Event('change', { bubbles: true }));
+      }, value);
+      return;
+    }
     if (handle) {
       switch (action) {
         case 'click':

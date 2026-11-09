@@ -19,6 +19,7 @@ import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
 import { arcDrag } from './pointer.js';
+import { cueText } from '../../watch.js';
 import { judge as hunchJudge } from '../../hunch/client.js';
 import { hunchEnabled } from '../../hunch/sidecar.js';
 
@@ -390,6 +391,14 @@ export default function captcha(server: FastMCP): void {
           log.push(`no ${why} element (${selector})`);
           return false;
         }
+        const b = await locator.boundingBox().catch(() => null);
+        await cueText(
+          driver.page,
+          why,
+          'click',
+          b ? { x: b.x, y: b.y, w: b.width, h: b.height } : null,
+          700
+        );
         await locator.click();
         await sleep(settle);
         return true;
@@ -531,6 +540,19 @@ export default function captcha(server: FastMCP): void {
                 `attempt ${attempt}: dial never settled before the press — dragging anyway`
               );
             }
+
+            await cueText(
+              driver.page,
+              `set rotation to ${Math.round(next.angle)}°`,
+              'input',
+              {
+                x: dialBox.x,
+                y: dialBox.y,
+                w: dialBox.width,
+                h: dialBox.height,
+              },
+              700
+            );
 
             await arcDrag(driver.page, {
               cx,
