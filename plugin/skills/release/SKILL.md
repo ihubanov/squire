@@ -7,6 +7,8 @@ description: Publish a new Squire version correctly — preflight the tree, tag 
 
 Publishing is driven entirely by the `Release` GitHub workflow, which fires on any `v*` tag pushed to `fork`. The authoritative version lives in `package.json`; `server.json` is synced from it by the `version` hook.
 
+npm authenticates that workflow through its **Trusted Publisher (OIDC)** setting for `@sniffski/squire` — there is no `NPM_TOKEN` secret and no 2FA prompt. **Never ask the user to `npm login` or re-auth before a release.** A local `npm whoami` returning `E401` is expected and irrelevant: the publish happens on the runner, not on this machine. The registry is only useful locally for read-back verification (`npm view`).
+
 ## Preflight (all must pass before tagging)
 
 ```sh
@@ -67,5 +69,6 @@ Note that npm's CDN makes a fresh version 404 for several minutes after a succes
 | --- | --- | --- |
 | `Tag must match package.json` fails | Tag pushed on a commit older than the bump | Delete and re-push the tag on the bump commit |
 | No workflow run at all | Tag pushed to `origin` (upstream), or tag already existed so push was a no-op | Push to `fork`; verify with `gh run list` after every tag push |
-| `npm publish` fails `EOTP`/auth | Missing `NPM_TOKEN` or 2FA | Maintainer fixes the secret; re-run the job |
+| `npm publish` fails auth/`EOTP` | Trusted Publisher (OIDC) binding broken for `@sniffski/squire` — not a missing token | Owner re-binds the Trusted Publisher on npmjs; no local login is needed |
+| Local `npm whoami` says `E401` | Normal; local npm is unrelated to CI publishing | Ignore it — verify with `npm view`, never by logging in |
 | Tag present locally, absent on fork | `git push fork vX.Y.Z` skipped | Push it explicitly |
