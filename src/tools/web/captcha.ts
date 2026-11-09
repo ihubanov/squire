@@ -279,8 +279,7 @@ export default function captcha(server: FastMCP): void {
         target: { x: number; y: number; width: number; height: number },
         dialBox: { x: number; y: number; width: number; height: number },
         handleBox:
-          | { x: number; y: number; width: number; height: number }
-          | undefined,
+          { x: number; y: number; width: number; height: number } | undefined,
         angle: number,
         attempt: number
       ): Promise<{
@@ -432,8 +431,7 @@ export default function captcha(server: FastMCP): void {
           const bearing = (p: { x: number; y: number }) =>
             (Math.atan2(p.y - cy, p.x - cx) * 180) / Math.PI;
           let handleBox:
-            | { x: number; y: number; width: number; height: number }
-            | undefined;
+            { x: number; y: number; width: number; height: number } | undefined;
 
           /**
            * Asks for the next angle, works out the knob geometry and drags.
