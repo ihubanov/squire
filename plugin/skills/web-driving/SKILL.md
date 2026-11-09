@@ -158,6 +158,12 @@ Rules that apply to all of them:
 - Detect success and failure, never assume: success is the thing the captcha guarded (the field, the reveal, the next page); failure is a changed challenge image or an error element. Poll for either with `playwright_evaluate`.
 - Have the user solve it when they are at the machine and it is cheap; hand over when a solve fails twice.
 
+## Watch it happen
+
+With `APPIUM_MCP_WATCH=1` every click, fill, hover and navigation draws a brief cue over the live page: a cursor glides to the target, a box highlights where it lands, a click ripples, and a navigation shows a toast with the destination host. There are no captions and nothing to click — it is purely so a person watching the browser can follow what Squire is doing.
+
+It adds roughly a quarter second per action and is best-effort: cues on a mid-navigation or unusual page are skipped, never fatal. Use `playwright_present` instead when the person should do the steps themselves or needs explanations.
+
 ## Verify, don't assume
 
 A step returning `status: "ok"` means the action didn't throw — not that the flow achieved its goal. Confirm with a final `eval` (a logged-in-only element, the expected URL/host, a success banner) or a screenshot before reporting success.

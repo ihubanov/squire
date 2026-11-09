@@ -30,6 +30,7 @@ import { isAbsolute } from 'node:path';
 import { assertNotProtected } from './protected-urls.js';
 import { assertNotUserFocused } from './focus-guard.js';
 import { groundLabelOnPage } from './vision-grounding.js';
+import { cueAt } from './watch.js';
 
 /** One instruction in a script. */
 export interface Step {
@@ -432,6 +433,8 @@ async function runActionable(
     throw new Error(`Step "${step.action}" requires a selector`);
   }
   const locator = page.locator(sel).first();
+  const kind = step.action === 'click' || step.action === 'hover' ? step.action : 'input';
+  await cueAt(page, locator, kind);
 
   const normal = async (): Promise<void> => {
     switch (step.action) {

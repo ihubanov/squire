@@ -7,6 +7,7 @@ import { getDriver, isPlaywrightDriverSession } from '../../session-store.js';
 import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
+import { cueNav } from '../../watch.js';
 
 export default function navigate(server: FastMCP): void {
   const navigateSchema = z.object({
@@ -49,6 +50,7 @@ export default function navigate(server: FastMCP): void {
         const response = await driver.page.goto(args.url, {
           waitUntil: args.waitUntil || 'load',
         });
+        await cueNav(driver.page, args.url);
 
         const status = response?.status() ?? 'unknown';
         const title = await driver.page.title();

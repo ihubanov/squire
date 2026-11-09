@@ -23,6 +23,7 @@
 export function installPresenter(cfg?: {
   accent?: string;
   compact?: boolean;
+  ambient?: boolean;
 }): boolean {
   const w = window as any;
   const existing = w.__squirePresenter;
@@ -126,6 +127,13 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
 .compact .hint, .compact .bar { display: none; }
 .compact .bubble.demo .bar { display: block; margin: 0 0 8px; }
 .compact button { padding: 5px 10px; border-radius: 8px; font-size: 12px; }
+/* Ambient watch mode: cursor, box and ripple only — no dim, no captions. */
+.ambient .spot { box-shadow: none; outline-width: 2px;
+  transition-duration: .18s, .18s, .18s, .18s, .3s, .3s; }
+.ambient .bubble, .ambient .arrow, .ambient .ring { display: none; }
+.ambient .cursor { transition-duration: .24s, .3s; }
+.toast.amb { top: auto; bottom: 28px; translate: -50% 0;
+  padding: 10px 16px; border-radius: 12px; font-size: 13px; }
 @media (prefers-color-scheme: dark) {
   .bubble { background: #1d2030; color: #eceef6; }
   .back { background: #2c3044; color: #eceef6; }
@@ -232,6 +240,7 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     advance: string;
     last: string;
     raf: number;
+    cueT: any;
     cursor: { x: number; y: number } | null;
   } = {
     active: false,
@@ -241,6 +250,7 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     advance: 'next',
     last: '',
     raf: 0,
+    cueT: 0,
     cursor: null,
   };
 
@@ -523,6 +533,9 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   };
 
   api.show = (o: any) => {
+    // A real tour takes the overlay back from ambient watch cues.
+    wrap.classList.remove('ambient');
+    clearTimeout(state.cueT);
     // `pending`: the caption changes now, the spotlight stays put until setTarget.
     pending = !!o.pending;
     if (!o.pending) {
@@ -590,7 +603,7 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
   const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   /** Glide the demo cursor to a viewport point; resolves when it lands. */
-  api.moveCursor = async (x: number, y: number) => {
+  api.moveCursor = async (x: number, y: number, ms = 820) => {
     const from = state.cursor ?? {
       x: window.innerWidth / 2,
       y: window.innerHeight - 40,
@@ -604,7 +617,7 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     }
     cursor.style.transform = `translate(${x - 5}px, ${y - 3}px)`;
     state.cursor = { x, y };
-    await sleep(820);
+    await sleep(ms);
     return true;
   };
 
@@ -617,8 +630,54 @@ button:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
     return true;
   };
 
+  /**
+   * Watch-mode cue: glide the cursor to `rect`, box it, ripple on a click,
+   * then fade. Purely passive — no caption, no dimming, no frame loop.
+   */
+  api.cue = (o: any) => {
+    wrap.classList.add('ambient');
+    bubble.classList.remove('on');
+    ring.classList.remove('on');
+    state.active = false;
+    cancelAnimationFrame(state.raf);
+    const r = o && o.rect;
+    if (o && o.text) {
+      api.toast(o.text);
+    }
+    if (r) {
+      const pad = 6;
+      const cx = r.x + r.w / 2;
+      const cy = r.y + r.h / 2;
+      spot.classList.remove('notarget');
+      spot.classList.add('on');
+      spot.style.left = `${r.x - pad}px`;
+      spot.style.top = `${r.y - pad}px`;
+      spot.style.width = `${r.w + pad * 2}px`;
+      spot.style.height = `${r.h + pad * 2}px`;
+      api.moveCursor(cx, cy, 240);
+      if (o.click) {
+        api.ripple(cx, cy);
+      }
+    }
+    clearTimeout(state.cueT);
+    state.cueT = setTimeout(() => {
+      spot.classList.remove('on');
+      cursor.classList.remove('on');
+    }, (o && o.ms) || 1200);
+    return true;
+  };
+
+  api.toast = (text: string) => {
+    const t = el('div', 'toast amb');
+    t.textContent = text;
+    wrap.appendChild(t);
+    setTimeout(() => t.remove(), 1700);
+    return true;
+  };
+
   api.destroy = () => {
     state.active = false;
+    clearTimeout(state.cueT);
     cancelAnimationFrame(state.raf);
     document.removeEventListener('click', onClick, true);
     document.removeEventListener('change', onChange, true);

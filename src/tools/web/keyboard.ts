@@ -8,6 +8,7 @@ import { elementUUIDScheme } from '../../schema.js';
 import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
+import { cueAt } from '../../watch.js';
 
 export function type(server: FastMCP): void {
   const typeSchema = z.object({
@@ -53,6 +54,7 @@ export function type(server: FastMCP): void {
       try {
         if (args.elementUUID) {
           const el = driver.requireElement(args.elementUUID);
+          await cueAt(driver.page, el, 'input');
           await el.type(args.text, { delay: args.delay });
         } else {
           await driver.page.keyboard.type(args.text, { delay: args.delay });

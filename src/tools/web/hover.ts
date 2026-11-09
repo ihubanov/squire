@@ -8,6 +8,7 @@ import { elementUUIDScheme } from '../../schema.js';
 import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
+import { cueAt } from '../../watch.js';
 
 export default function hover(server: FastMCP): void {
   const hoverSchema = z.object({
@@ -39,6 +40,7 @@ export default function hover(server: FastMCP): void {
 
       try {
         const el = driver.requireElement(args.elementUUID);
+        await cueAt(driver.page, el, 'hover');
         await el.hover();
         logActivity({
           tool: 'playwright_hover',

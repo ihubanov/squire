@@ -6,6 +6,7 @@ import {
 } from './session-store.js';
 import type { DriverInstance } from './session-store.js';
 import type { StringRecord, Element as AppiumElement } from '@appium/types';
+import { cueAt } from './watch.js';
 
 /**
  * Execute a driver command.
@@ -137,6 +138,7 @@ export async function setValue(
 ) {
   if (isPlaywrightDriverSession(driver)) {
     const el = driver.requireElement(elementUUID);
+    await cueAt(driver.page, el, 'input');
     await el.fill(text);
     return;
   }
@@ -160,6 +162,7 @@ export async function elementClick(
 ): Promise<void> {
   if (isPlaywrightDriverSession(driver)) {
     const el = driver.requireElement(elementUUID);
+    await cueAt(driver.page, el, 'click');
     await el.click();
     return;
   }
