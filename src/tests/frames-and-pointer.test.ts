@@ -426,6 +426,27 @@ describe('playwright_captcha_solve', () => {
     }
   }, 30_000);
 
+  test('a miss buys a fresh puzzle instead of re-guessing the picture', async () => {
+    await load(
+      DIAL +
+        '<button id="reloadCaptcha" style="position:absolute;left:0;top:0" onclick="window.__refreshes = (window.__refreshes || 0) + 1">r</button>'
+    );
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      handle: '#handle',
+      angleScript: '(() => 200)()',
+      judgeScript: '(() => ({ ok: false, note: "miss" }))',
+      refresh: '#reloadCaptcha',
+      holdMs: 100,
+      settleMs: 150,
+      maxAttempts: 3,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/attempt 1: .*miss — fresh puzzle for the next try/);
+    expect(text).toMatch(/attempt 2: .*miss — fresh puzzle for the next try/);
+    expect(await page.evaluate(() => (window as any).__refreshes)).toBe(3);
+  }, 30_000);
+
   test('a knob that is not an element is aimed by bearing from the script', async () => {
     // A range-input thumb has no usable box: the input's box spans the whole
     // track. With no handle selector, the script has to say where the knob is.

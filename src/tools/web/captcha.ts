@@ -717,6 +717,17 @@ export default function captcha(server: FastMCP): void {
             log.push('wall-clock cap hit');
             break;
           }
+          // A miss burns this picture: the next attempt should solve a new
+          // puzzle, not re-guess one the widget already rejected. An expired
+          // picture is replaced by its own age check anyway, so only ask for a
+          // refresh when the picture is still current.
+          if (args.refresh && (await clickIfPresent(args.refresh, 'refresh'))) {
+            log.push(
+              `attempt ${attempt}: miss — fresh puzzle for the next try`
+            );
+            challengeAt = Date.now();
+            await sleep(settle);
+          }
         }
 
         // The same score on every attempt is a geometry signal, not an angle
