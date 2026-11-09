@@ -87,21 +87,25 @@ supplies the angle. Three measured constraints (2026-11-08):
 - The tool never clicks the submit control. `successScript` is a verdict, not
   a submission: the caller has to submit (or use `SquireDial.solve()`).
 
-On 1.34.0+, for a range-input dial (inject this skill first):
+On 1.34.3+, for a range-input dial (inject this skill first). The control is
+a track, not a disc, so the script returns a `track` line and the tool drags
+straight along it — an arc leaves the control and the value stops updating:
 
 ```
 playwright_captcha_solve({
   dial: '#source',
   angleScript: `(async () => {
-    const rot = Number(document.querySelector('#rotateRange').value) || 0;
+    const el = document.querySelector('#rotateRange');
+    const rot = Number(el.value) || 0;
     const c = await SquireDial.compute('mirror');
+    const t = el.getBoundingClientRect();
     const d = document.querySelector('#source').getBoundingClientRect();
-    const cx = d.width / 2, cy = d.height / 2;
-    const r = Math.min(d.width, d.height) * 0.28;
-    const a = rot * Math.PI / 180;
+    // Thumb-centre travel, inset by half a thumb at both ends.
+    const half = (t.width / 40);
+    const y = t.y + t.height / 2 - d.y;
     window.__dialTarget = c.angle;
-    return { angle: c.angle, startAngle: rot, radius: r,
-             grab: { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) },
+    return { angle: c.angle, startAngle: rot, min: Number(el.min), max: Number(el.max),
+             track: { x1: t.x - d.x + half, y1: y, x2: t.x - d.x + t.width - half, y2: y },
              confidence: c.confidence };
   })()`,
   settleScript: "Math.abs(Number(document.querySelector('#rotateRange').value) - window.__dialTarget) <= 1",
@@ -109,10 +113,19 @@ playwright_captcha_solve({
 })
 ```
 
-`startAngle` must be the widget's _current_ rotation (its live control value),
-because the tool issues one absolute drag from live state to the answer.
-`grab` is px from the dial box's top-left; pressing it starts the drag where
-the widget expects.
+If the widget also refuses to submit without its own "a user moved it" flag
+(checked live), add that flag to `settleScript` as well — a value set by the
+load animation does not raise it.
+
+`startAngle` must be the widget's _current_ control value, because the tool
+issues one absolute drag from live state to the answer; `angle` is the answer
+in the same units. `track`, `min` and `max` are px from the dial box's
+top-left and the control's own value bounds. Verify the control really is
+linear in the rotation before trusting it: set a value, read the computed
+transform, and check the degrees move proportionally with no offset.
+
+Watch mode (`APPIUM_MCP_WATCH=1`) captions each drag with the target angle, so
+a person watching sees the turn instead of a jump.
 
 ## Generic case
 

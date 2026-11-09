@@ -425,6 +425,51 @@ export async function arcDrag(
   return end;
 }
 
+export interface LineDrag {
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  steps: number;
+  delay: number;
+  hold: number;
+  cue?: string;
+}
+
+/**
+ * Press at `from`, travel straight to `to` in real moves, hold, release.
+ * For linear controls — a range track, a horizontal/vertical slider — where
+ * an arc path leaves the control and the value stops updating.
+ */
+export async function lineDrag(
+  page: import('playwright').Page,
+  o: LineDrag
+): Promise<{ x: number; y: number }> {
+  if (o.cue) {
+    await cueText(page, o.cue, 'input', null, 700);
+  }
+  await page.mouse.move(o.from.x, o.from.y);
+  lastPoint = o.from;
+  await sleep(Math.max(o.delay, 20));
+  await page.mouse.down();
+  for (let i = 1; i <= o.steps; i++) {
+    const t = i / o.steps;
+    const p = {
+      x: o.from.x + (o.to.x - o.from.x) * t,
+      y: o.from.y + (o.to.y - o.from.y) * t,
+    };
+    await page.mouse.move(p.x, p.y);
+    lastPoint = p;
+    if (o.delay) {
+      await sleep(o.delay);
+    }
+  }
+  if (o.hold) {
+    await sleep(o.hold);
+  }
+  await page.mouse.up();
+  lastPoint = o.to;
+  return o.to;
+}
+
 /** One point on the circle. Angle in degrees, 0 = 3 o'clock, positive = clockwise (y grows down). */
 function pointOnArc(cx: number, cy: number, radius: number, angleDeg: number) {
   const rad = (angleDeg * Math.PI) / 180;

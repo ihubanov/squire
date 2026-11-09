@@ -18,7 +18,7 @@ import { getDriver, isPlaywrightDriverSession } from '../../session-store.js';
 import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
-import { arcDrag } from './pointer.js';
+import { arcDrag, lineDrag } from './pointer.js';
 import { cueText } from '../../watch.js';
 import { judge as hunchJudge } from '../../hunch/client.js';
 import { hunchEnabled } from '../../hunch/sidecar.js';
@@ -42,7 +42,7 @@ export default function captcha(server: FastMCP): void {
     angleScript: z
       .string()
       .describe(
-        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element, and derive the grab from live state every call (a range input value mapped along its track) — the script is re-run when a drag has to be repeated, so a stale constant grab would press the wrong place. Keep any search-window state in a window variable so it shrinks as attempts go on. Land the final precision in `angle`: a drag is absolute (startAngle from live state to `angle` in one press), so deltas do not have to accumulate across presses, and on widgets that re-fit or redraw themselves nothing set by an earlier press survives — a sequence of small corrections is a sequence of absolute drags, never wheel ticks that add up. Return `confidence` (0–1) when the fit is scored from evidence (spread and peak of candidate answers): the tool logs it, and with minAngleConfidence a low value asks for a new picture instead of spending a hopeless drag.'
+        'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element, and derive the grab from live state every call (a range input value mapped along its track) — the script is re-run when a drag has to be repeated, so a stale constant grab would press the wrong place. For a linear control add `track: { x1, y1, x2, y2 }` (px from the dial box top-left) with `min`/`max` (the control\'s value range, default 0–360): the drag then runs straight along that line with startAngle and angle read as values, which is what a range input needs — an arc leaves the track and the value stops updating. Inset the line by half the thumb width at both ends so the extremes are reachable. Keep any search-window state in a window variable so it shrinks as attempts go on. Land the final precision in `angle`: a drag is absolute (startAngle from live state to `angle` in one press), so deltas do not have to accumulate across presses, and on widgets that re-fit or redraw themselves nothing set by an earlier press survives — a sequence of small corrections is a sequence of absolute drags, never wheel ticks that add up. Return `confidence` (0–1) when the fit is scored from evidence (spread and peak of candidate answers): the tool logs it, and with minAngleConfidence a low value asks for a new picture instead of spending a hopeless drag.'
       ),
     successScript: z
       .string()
@@ -454,6 +454,9 @@ export default function captcha(server: FastMCP): void {
             startAngle?: number;
             radius?: number;
             grab?: { x?: number; y?: number };
+            track?: { x1?: number; y1?: number; x2?: number; y2?: number };
+            min?: number;
+            max?: number;
             confidence?: number;
             confidenceNote?: string;
           };
@@ -554,17 +557,59 @@ export default function captcha(server: FastMCP): void {
               700
             );
 
-            await arcDrag(driver.page, {
-              cx,
-              cy,
-              radius,
-              startAngle,
-              delta,
-              steps,
-              delay: 12,
-              hold: 80,
-              grab,
-            });
+            // A linear track (range input, horizontal slider) needs a straight
+            // drag along it: an arc leaves the control and the value stops
+            // updating. Values, not bearings, drive the position; the script
+            // supplies the travel line already inset by half a thumb, so both
+            // ends are reachable and neither overshoots.
+            const track = next.track;
+            const trackLine =
+              track &&
+              typeof track.x1 === 'number' &&
+              typeof track.y1 === 'number' &&
+              typeof track.x2 === 'number' &&
+              typeof track.y2 === 'number'
+                ? {
+                    x1: dialBox.x + track.x1,
+                    y1: dialBox.y + track.y1,
+                    x2: dialBox.x + track.x2,
+                    y2: dialBox.y + track.y2,
+                  }
+                : undefined;
+            if (trackLine) {
+              const min = typeof next.min === 'number' ? next.min : 0;
+              const max = typeof next.max === 'number' ? next.max : 360;
+              const span = max - min || 1;
+              const at = (value: number) => {
+                const f = Math.min(1, Math.max(0, (value - min) / span));
+                return {
+                  x: trackLine.x1 + (trackLine.x2 - trackLine.x1) * f,
+                  y: trackLine.y1 + (trackLine.y2 - trackLine.y1) * f,
+                };
+              };
+              await lineDrag(driver.page, {
+                from: at(startAngle),
+                to: at(next.angle),
+                steps: Math.max(
+                  20,
+                  Math.min(45, Math.ceil(Math.abs(delta) / 8))
+                ),
+                delay: 12,
+                hold: 80,
+              });
+            } else {
+              await arcDrag(driver.page, {
+                cx,
+                cy,
+                radius,
+                startAngle,
+                delta,
+                steps,
+                delay: 12,
+                hold: 80,
+                grab,
+              });
+            }
             await sleep(settle);
             return { angle: next.angle, startAngle, steps };
           };
