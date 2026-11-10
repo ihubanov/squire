@@ -1,3 +1,9 @@
+## [1.34.5](https://github.com/appium/appium-mcp/compare/v1.34.4...v1.34.5) (2026-11-07)
+
+### Features
+
+* **plugin:** enable built-in autoupdate via the marketplace entry
+
 ## [1.27.0](https://github.com/appium/appium-mcp/compare/v1.26.0...v1.27.0) (2026-03-14)
 
 ### Features
