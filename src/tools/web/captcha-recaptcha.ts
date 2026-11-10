@@ -42,7 +42,6 @@ export const RECAPTCHA_TEST_KEYS = {
 export type RecaptchaFailureCode =
   | 'no_session'
   | 'widget_missing'
-  | 'mode_unknown'
   | 'anchor_unchecked'
   | 'challenge_timeout'
   | 'challenge_expired'
@@ -52,6 +51,7 @@ export type RecaptchaFailureCode =
   | 'retry_cap'
   | 'token_absent'
   | 'needs_answer'
+  | 'script_error'
   | 'audio_unavailable'
   | 'audio_failed'
   | 'timeout';
@@ -205,9 +205,12 @@ async function readPrompt(frame: Frame): Promise<string> {
   try {
     return (await frame.evaluate(
       () =>
-        document.querySelector('.rc-imageselect-desc-no-canonical, ' +
-          '.rc-imageselect-desc, .rc-audiochallenge-instructions')?.textContent
-          ?.trim() ?? ''
+        document
+          .querySelector(
+            '.rc-imageselect-desc-no-canonical, ' +
+              '.rc-imageselect-desc, .rc-audiochallenge-instructions'
+          )
+          ?.textContent?.trim() ?? ''
     )) as string;
   } catch {
     return '';
@@ -332,6 +335,7 @@ export default function captchaRecaptcha(server: FastMCP): void {
       assertNotProtected(page.url(), 'drive a captcha in');
       await assertNotUserFocused(page, 'drive a captcha in');
 
+      const mode = args.mode ?? 'auto';
       const maxAttempts = args.maxAttempts ?? 5;
       const maxMs = args.maxMs ?? 90_000;
       const verifyMs = args.verifyMs ?? 8000;
@@ -350,17 +354,23 @@ export default function captchaRecaptcha(server: FastMCP): void {
           return driver.resolveFrame(page, args.frame);
         }
         const locator = page.mainFrame().locator(ANCHOR_SELECTOR).first();
-        if (!(await locator.count())) {
-          const any = page.mainFrame().locator(ANCHOR_ANY_SELECTOR).first();
-          if (!(await any.count())) {
-            throw new RecaptchaError(
-              'widget_missing',
-              'no reCAPTCHA anchor iframe — is the widget rendered, or is this a v3 page?'
-            );
-          }
-          return (await any.contentFrame()) as unknown as Frame;
+        let handle = (await locator.count())
+          ? await locator.elementHandle()
+          : null;
+        if (!handle) {
+          handle = await page
+            .mainFrame()
+            .locator(ANCHOR_ANY_SELECTOR)
+            .first()
+            .elementHandle();
         }
-        const frame = (await locator.contentFrame()) as unknown as Frame | null;
+        if (!handle) {
+          throw new RecaptchaError(
+            'widget_missing',
+            'no reCAPTCHA anchor iframe — is the widget rendered, or is this a v3 page?'
+          );
+        }
+        const frame = await handle.contentFrame();
         if (!frame) {
           throw new RecaptchaError(
             'widget_missing',
@@ -372,10 +382,16 @@ export default function captchaRecaptcha(server: FastMCP): void {
 
       const resolveChallenge = async (): Promise<Frame | null> => {
         const locator = page.mainFrame().locator(CHALLENGE_SELECTOR).first();
+        // count() is immediate; elementHandle() alone waits 30 s, which would
+        // make every "no challenge yet" poll block for the whole test budget.
         if (!(await locator.count())) {
           return null;
         }
-        return (await locator.contentFrame()) as unknown as Frame | null;
+        const handle = await locator.elementHandle();
+        if (!handle) {
+          return null;
+        }
+        return handle.contentFrame();
       };
 
       const finish = (
@@ -535,7 +551,7 @@ export default function captchaRecaptcha(server: FastMCP): void {
       };
 
       try {
-        if (args.mode === 'v3') {
+        if (mode === 'v3') {
           return await runV3(page, args, log, started);
         }
 
@@ -544,11 +560,14 @@ export default function captchaRecaptcha(server: FastMCP): void {
           .locator(ANCHOR_ANY_SELECTOR)
           .count();
         const hasGrecaptcha = Boolean(
-          await mainEval(
-            () => typeof (window as any).grecaptcha !== 'undefined'
-          )
+          await mainEval(() => 'grecaptcha' in window)
         );
-        if (args.mode === 'auto' && !hasAnchor && hasGrecaptcha) {
+        // A v3 badge is itself an iframe titled "reCAPTCHA", so v3 wins in
+        // auto only when no real v2 widget container exists.
+        const hasV2Widget = Boolean(
+          await page.mainFrame().locator('.g-recaptcha, [data-sitekey]').count()
+        );
+        if (mode === 'auto' && !hasV2Widget && hasGrecaptcha) {
           return await runV3(page, args, log, started);
         }
         if (!hasAnchor) {
@@ -560,17 +579,20 @@ export default function captchaRecaptcha(server: FastMCP): void {
 
         // v2 invisible: no checkbox to click, execute returns the token.
         if (
-          args.mode !== 'v2' &&
+          mode !== 'v2' &&
           (await page
             .mainFrame()
-            .locator('[data-size="invisible"], .g-recaptcha[data-size="invisible"]')
+            .locator(
+              '[data-size="invisible"], .g-recaptcha[data-size="invisible"]'
+            )
             .count())
         ) {
           const t = await executeInvisible(page, args);
           return finish('pass', t, 'v2-invisible', log, started, undefined);
         }
 
-        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        let attempt = 1;
+        for (; attempt <= maxAttempts; attempt++) {
           if (Date.now() - started > maxMs) {
             lastFailure = new RecaptchaError('timeout', 'wall-clock cap hit');
             break;
@@ -642,34 +664,27 @@ export default function captchaRecaptcha(server: FastMCP): void {
 
           if (challenge.type === 'audio') {
             if (!args.audioScript) {
-              return finish(
-                'needs_answer',
-                '',
-                'v2',
-                log,
-                started,
-                undefined,
-                {
-                  status: 'needs_answer',
-                  challenge: {
-                    type: 'audio',
-                    prompt: challenge.prompt,
-                    audioUrl: challenge.url,
-                  },
-                  failure: {
-                    code: 'audio_unavailable',
-                    message:
-                      'audio clip captured — pass audioScript to transcribe it',
-                  },
-                }
-              );
+              return finish('needs_answer', '', 'v2', log, started, undefined, {
+                status: 'needs_answer',
+                challenge: {
+                  type: 'audio',
+                  prompt: challenge.prompt,
+                  audioUrl: challenge.url,
+                },
+                failure: {
+                  code: 'audio_unavailable',
+                  message:
+                    'audio clip captured — pass audioScript to transcribe it',
+                },
+              });
             }
             let text: unknown;
             try {
               text = await challenge.frame.evaluate(
-                ({ code, url, attempt }) =>
-                  // eslint-disable-next-line no-new-func
-                  (0, eval)(`(${code})`)({ url, attempt }),
+                ({ code, url, attempt }) => {
+                  const v = (0, eval)(`(${code})`);
+                  return typeof v === 'function' ? v({ url, attempt }) : v;
+                },
                 { code: args.audioScript, url: challenge.url, attempt }
               );
               if (typeof text !== 'string' || !text.trim()) {
@@ -704,33 +719,44 @@ export default function captchaRecaptcha(server: FastMCP): void {
 
           // Grid: no answer yet — hand the capture back to the caller.
           if (!args.tiles && !args.tilesScript) {
-            return finish(
-              'needs_answer',
-              '',
-              'v2',
-              log,
-              started,
-              undefined,
-              {
-                status: 'needs_answer',
-                challenge: {
-                  type: 'grid',
-                  prompt: challenge.prompt,
-                  image: challenge.image,
-                  imageBox: challenge.imageBox,
-                  tiles: challenge.tiles,
-                },
-                failure: {
-                  code: 'needs_answer',
-                  message:
-                    'grid captured — pass `tiles` (or tilesScript) with the matching indices',
-                },
-              }
-            );
+            return finish('needs_answer', '', 'v2', log, started, undefined, {
+              status: 'needs_answer',
+              challenge: {
+                type: 'grid',
+                prompt: challenge.prompt,
+                image: challenge.image,
+                imageBox: challenge.imageBox,
+                tiles: challenge.tiles,
+              },
+              failure: {
+                code: 'needs_answer',
+                message:
+                  'grid captured — pass `tiles` (or tilesScript) with the matching indices',
+              },
+            });
           }
 
-          await applyTiles(page, challenge, args.tiles, args.tilesScript, log);
-          if (await present(challenge.frame, VERIFY_BUTTON, 2000)) {
+          let pressVerify = true;
+          try {
+            pressVerify = await applyTiles(
+              page,
+              challenge,
+              args.tiles,
+              args.tilesScript,
+              log
+            );
+          } catch (err: any) {
+            lastFailure = new RecaptchaError(
+              'script_error',
+              `tilesScript failed: ${err}`
+            );
+            log.push(`attempt ${attempt}: ${lastFailure.code}`);
+            continue;
+          }
+          if (
+            pressVerify &&
+            (await present(challenge.frame, VERIFY_BUTTON, 2000))
+          ) {
             await clickIn(challenge.frame, VERIFY_BUTTON, 'verify selection');
           }
           const t = await waitToken(verifyMs);
@@ -756,10 +782,16 @@ export default function captchaRecaptcha(server: FastMCP): void {
         if (!lastFailure && Date.now() - started > maxMs) {
           lastFailure = new RecaptchaError('timeout', 'wall-clock cap hit');
         }
-        lastFailure ??= new RecaptchaError(
-          'retry_cap',
-          `no pass after ${maxAttempts} attempts`
-        );
+        // Exhausting the loop is the cap, whatever the last retryable reason
+        // was. A break (bot suspected, wall clock) keeps its own code.
+        if (attempt > maxAttempts) {
+          lastFailure = new RecaptchaError(
+            'retry_cap',
+            `no pass after ${maxAttempts} attempts` +
+              (lastFailure ? ` (last: ${lastFailure.code})` : '')
+          );
+        }
+        lastFailure ??= new RecaptchaError('retry_cap', 'no pass');
         log.push(`stopped: ${lastFailure.code} — ${lastFailure.message}`);
         return finish('not_solved', '', 'v2', log, started, lastFailure);
       } catch (err: any) {
@@ -790,12 +822,15 @@ async function applyTiles(
   tiles: number[] | undefined,
   tilesScript: string | undefined,
   log: string[]
-): Promise<void> {
+): Promise<boolean> {
+  // Returns whether the tool still has to press the verify button.
   if (tilesScript) {
     const returned = await challenge.frame.evaluate(
-      ({ code, arg }) =>
-        // eslint-disable-next-line no-new-func
-        (0, eval)(`(${code})`)(arg),
+      ({ code, arg }) => {
+        const v = (0, eval)(`(${code})`);
+        // Accept both a function expression and an already-invoked value.
+        return typeof v === 'function' ? v(arg) : v;
+      },
       {
         code: tilesScript,
         arg: {
@@ -809,16 +844,18 @@ async function applyTiles(
     );
     if (Array.isArray(returned)) {
       await pressTileIndices(page, challenge, returned as number[], log);
-    } else {
-      log.push('  tilesScript handled the presses');
+      return true;
     }
-    return;
+    // The script pressed the tiles and the verify button itself.
+    log.push('  tilesScript handled the presses');
+    return false;
   }
   if (!tiles || !tiles.length) {
     log.push('  no tiles given — verifying the empty selection');
-    return;
+    return true;
   }
   await pressTileIndices(page, challenge, tiles, log);
+  return true;
 }
 
 async function pressTileIndices(
@@ -860,9 +897,9 @@ async function runV3(
     args.sitekey ??
     ((await main.evaluate(
       () =>
-        document.querySelector('.g-recaptcha[data-sitekey]')?.getAttribute(
-          'data-sitekey'
-        ) ??
+        document
+          .querySelector('.g-recaptcha[data-sitekey]')
+          ?.getAttribute('data-sitekey') ??
         Array.from(document.querySelectorAll('script[src]'))
           .map((s) => /[?&]render=([^&]+)/.exec(s.getAttribute('src') ?? ''))
           .find(Boolean)?.[1] ??
@@ -877,7 +914,9 @@ async function runV3(
   const action = args.action ?? 'submit';
   const token = (await main.evaluate(
     async ({ key, act, ent }) => {
-      const g = ent ? (window as any).grecaptcha?.enterprise : (window as any).grecaptcha;
+      const g = ent
+        ? (window as any).grecaptcha?.enterprise
+        : (window as any).grecaptcha;
       if (!g) {
         throw new Error('grecaptcha is not defined');
       }
@@ -906,6 +945,18 @@ async function runV3(
     detail: `v3 token ${token.length} chars`,
   });
   const status = token ? 'unverified' : 'not_solved';
+  const payload = {
+    provider: 'recaptcha',
+    mode: 'v3',
+    status,
+    verified: false,
+    token: token || undefined,
+    tokenLength: token.length || undefined,
+    elapsedMs: Date.now() - started,
+    failure: token
+      ? null
+      : { code: 'token_absent', message: 'execute returned no token' },
+  };
   return {
     content: [
       {
@@ -913,7 +964,7 @@ async function runV3(
         text:
           `Captcha recaptcha v3: ${status} in ${Math.round((Date.now() - started) / 1000)}s` +
           ' — no score assertion (server-side only)\n' +
-          log.join('\n'),
+          `${log.join('\n')}\n${JSON.stringify(payload, null, 2)}`,
       },
     ],
   };
@@ -952,7 +1003,11 @@ async function executeInvisible(
       }
       return String(t || '');
     },
-    { key: sitekey, act: args.action ?? 'submit', ent: Boolean(args.enterprise) }
+    {
+      key: sitekey,
+      act: args.action ?? 'submit',
+      ent: Boolean(args.enterprise),
+    }
   )) as string;
 }
 
