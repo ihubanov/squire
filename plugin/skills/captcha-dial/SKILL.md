@@ -78,12 +78,12 @@ supplies the angle. Three measured constraints (2026-11-08):
 
 - The tool is registered only when the server starts with
   `APPIUM_MCP_CAPTCHA=1`.
-- **The published server (1.33.1) requires a `handle` element and reads the
-  start angle from it, so it cannot drive a control that has no knob element
-  (a range input).** The repo source (1.34.0) adds a geometry contract —
-  `angleScript` may return `{angle, startAngle, radius, grab}` — which is what
-  makes range inputs work. Until 1.34.0 is published and the plugin pin in
-  `plugin/.mcp.json` is raised, call `SquireDial.solve()` directly instead.
+- **Servers older than 1.34.0 require a `handle` element and read the start
+  angle from it, so they cannot drive a control that has no knob element
+  (a range input).** The geometry contract — `angleScript` may return
+  `{angle, startAngle, radius, grab}` — arrived in 1.34.0 and is in the
+  published server (1.34.5). If you are on something older, call
+  `SquireDial.solve()` directly instead.
 - The tool never clicks the submit control. `successScript` is a verdict, not
   a submission: the caller has to submit (or use `SquireDial.solve()`).
 
