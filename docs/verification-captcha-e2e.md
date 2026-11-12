@@ -86,8 +86,40 @@ Evidence the gate itself is solvable by a plain coordinate click at the moment t
 - Not fixed here (verifier role): the turnstile press path needs a closed-shadow-capable
   fallback (click the frame's checkbox offset, or poll the host field for the 1x auto-pass)
   and a fresh live run.
-- Unverified by design: v3 score (server-side only), reCAPTCHA image-grid tiles and audio
-  transcription (the test key always passes without a grid), and any real production sitekey.
+- Unverified by design: v3 score (server-side only), audio transcription, and any real
+  production sitekey. The v2 test key always passes without a grid, so **this table does not
+  cover the image grid** — see the separate live run below.
+
+### reCAPTCHA image-grid live evidence (2026-11-12)
+
+Run against Google's real demo (`recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php`,
+sitekey `6LfW6wATAAAAAHLqO2pb8bDBahxlMxNdo9g947u9`), headed-by-default solver driven over
+stdio MCP, tiles classified by a real vision endpoint
+(`nvidia/Nemotron-3.5-Super-VL-NVFP4` via the hunch-config fallback; not a stub):
+
+| Run | Result |
+|---|---|
+| `live3` (`playwright_captcha_recaptcha`, maxAttempts 5) | **PASS** — rounds 1-3 rejected, round 4 selected `4,7` and the widget issued a **2297-char** token; 49.2 s total. Demo form submitted; response body echoed the same token in `g-recaptcha-response` (the capture was truncated at 600 chars before the verdict line, so server-side acceptance of the token is **not** shown in the log). |
+| `auto1` (`playwright_captcha_solve`, provider auto) | **PASS** — dispatched to the reCAPTCHA solver, 48.9 s; token present in the host page (2340 ch). |
+| `live4` (repeat, 2026-11-12 later) | **FAIL** — 5/5 grid rounds rejected, 71 s, no token, `retry_cap`. |
+| `live5-headed` (same harness, `headless: false`, under Xvfb) | **FAIL** — first headed run. Rounds 1-2 rejected on 3×3; the widget then escalated to 4×4 ("Select all squares with motorcycles"), round 3 rejected, round 4 the vision endpoint returned no usable selection → `needs_answer`, 56 s. Confirms the demo escalates grid size after repeated rejects and that the 4×4 path can lose the model. |
+
+All runs above except `live5-headed` were headless (`headless: true` in the harness), so the
+pass rate is a headless number.
+
+So the grid path is real and has passed live, but the vision classifier's tile picks are
+**unreliable**: 2 passes and 3 failures across the five runs recorded above. `live4` failed
+on 3×3 rounds (all five selections rejected); `live5-headed` is the only run that reached
+4×4, and there the whole-grid classifier ran out of token budget and returned no JSON.
+Treat the grid as experimental until a larger pass-rate sample exists; the checkbox and v3
+paths are the stable ones. Audio transcription remains unverified.
+
+Follow-up (2026-11-13, not yet live-verified): the capture now crops the image to the tile
+grid instead of the whole panel (the instruction header is passed as text and was skewing
+row/column reading), the whole-grid budget is 8192 tokens (a 4×4 was measured finishing at
+3941/4096 with the JSON cut off), and an unusable whole-grid answer falls back to
+classifying each tile crop separately (~1.3 s/tile, four in parallel). A fresh live pass-rate
+run is still needed before this can be called an improvement.
 
 ## SAGE
 
