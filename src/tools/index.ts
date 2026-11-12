@@ -71,6 +71,8 @@ import { goBack, goForward, reload } from './web/browser-navigation.js';
 import evaluate from './web/evaluate.js';
 import frames from './web/frames.js';
 import captcha from './web/captcha.js';
+import captchaTurnstile from './web/captcha-turnstile.js';
+import captchaRecaptcha from './web/captcha-recaptcha.js';
 import runScriptTool from './web/run-script.js';
 import present from './web/present.js';
 import selectOption from './web/select-option.js';
@@ -286,6 +288,8 @@ export default function registerTools(server: FastMCP): void {
   // not there cannot be picked by mistake.
   if (process.env.APPIUM_MCP_CAPTCHA === '1') {
     captcha(server);
+    captchaTurnstile(server);
+    captchaRecaptcha(server);
   }
   newTab(server);
   switchTab(server);

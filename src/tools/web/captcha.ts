@@ -20,16 +20,24 @@ import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
 import { arcDrag, lineDrag } from './pointer.js';
 import { cueText } from '../../watch.js';
+import { recaptchaSchema, solveRecaptcha } from './captcha-recaptcha.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Registers playwright_captcha_solve. */
 export default function captcha(server: FastMCP): void {
   const schema = z.object({
+    provider: z
+      .enum(['auto', 'dial', 'recaptcha'])
+      .optional()
+      .describe(
+        'Which captcha to solve. "auto" (default) picks reCAPTCHA when its widget is on the page and the rotation dial otherwise (or whenever `dial` is given). "recaptcha" covers Google reCAPTCHA v2 (checkbox, image grid, audio) and v3 token capture; its dedicated tool playwright_captcha_recaptcha takes the same arguments directly. Cloudflare Turnstile has its own tool, playwright_captcha_turnstile.'
+      ),
     dial: z
       .string()
+      .optional()
       .describe(
-        'CSS selector of the dial body of a rotate-the-disc captcha (rotation dial / radial slider — the only captcha type this tool solves): the disc or its rotation track, e.g. "#dial" or ".rotation-disc".'
+        'CSS selector of the dial body of a rotate-the-disc captcha (rotation dial / radial slider): the disc or its rotation track, e.g. "#dial" or ".rotation-disc". Required for the dial provider.'
       ),
     handle: z
       .string()
@@ -39,6 +47,7 @@ export default function captcha(server: FastMCP): void {
       ),
     angleScript: z
       .string()
+      .optional()
       .describe(
         'JS run in the widget frame before each attempt; returns the next end angle in degrees, or { angle, direction } ("cw" | "ccw" | "shortest"). It may also return { startAngle, radius, grab } to override the dial geometry: startAngle and radius in the same convention as playwright_drag_arc, grab as {x, y} px from the dial box top-left. Use those when the knob is not an element, and derive the grab from live state every call (a range input value mapped along its track) — the script is re-run when a drag has to be repeated, so a stale constant grab would press the wrong place. For a linear control add `track: { x1, y1, x2, y2 }` (px from the dial box top-left) with `min`/`max` (the control\'s value range, default 0–360): the drag then runs straight along that line with startAngle and angle read as values, which is what a range input needs — an arc leaves the track and the value stops updating. Inset the line by half the thumb width at both ends so the extremes are reachable. Keep any search-window state in a window variable so it shrinks as attempts go on. Land the final precision in `angle`: a drag is absolute (startAngle from live state to `angle` in one press), so deltas do not have to accumulate across presses, and on widgets that re-fit or redraw themselves nothing set by an earlier press survives — a sequence of small corrections is a sequence of absolute drags, never wheel ticks that add up. Return `confidence` (0–1) when the fit is scored from evidence (spread and peak of candidate answers): the tool logs it, and with minAngleConfidence a low value asks for a new picture instead of spending a hopeless drag.'
       ),
@@ -160,7 +169,7 @@ export default function captcha(server: FastMCP): void {
   server.addTool({
     name: 'playwright_captcha_solve',
     description:
-      'Solve a rotation-dial (rotate-the-disc / radial slider) captcha by dragging it round. Repeats: read the next angle from angleScript, drag the knob there with real pointer moves, screenshot the widget and score it with judgeScript (and/or check successScript), re-show and refresh, then stop when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
+      'Solve a captcha in the active web page. With `provider: "auto"` (default) it dispatches: a Google reCAPTCHA widget (v2 checkbox / image grid / audio, or v3 token) is solved by the reCAPTCHA solver; otherwise it solves a rotation-dial (rotate-the-disc / radial slider) captcha by dragging it round. Dial path: repeats reading the next angle from angleScript, dragging the knob there with real pointer moves, screenshotting the widget and scoring it with judgeScript (and/or checking successScript), re-showing and refreshing, then stopping when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. For reCAPTCHA the image grid is classified by the configured vision endpoint (APPIUM_MCP_CAPTCHA_VLM_URL, or the claude-local hunch config) and re-solved each round. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
     parameters: schema,
     annotations: { readOnlyHint: false, openWorldHint: false },
     execute: async (args: z.infer<typeof schema>): Promise<ContentResult> => {
@@ -172,6 +181,46 @@ export default function captcha(server: FastMCP): void {
       }
       assertNotProtected(driver.page.url(), 'drive a captcha in');
       await assertNotUserFocused(driver.page, 'drive a captcha in');
+
+      // One entry point, several captcha types. A dial selector always means
+      // a dial; otherwise look for a Google widget before asking for dial
+      // arguments the caller did not have to supply.
+      const provider = args.provider ?? 'auto';
+      if (provider === 'recaptcha' || (provider === 'auto' && !args.dial)) {
+        const main = driver.page.mainFrame();
+        const isRecaptcha =
+          provider === 'recaptcha' ||
+          Boolean(
+            await main
+              .evaluate(() => {
+                if ('grecaptcha' in window) {
+                  return true;
+                }
+                return Boolean(
+                  document.querySelector(
+                    'iframe[title*="reCAPTCHA" i], .g-recaptcha'
+                  )
+                );
+              })
+              .catch(() => false)
+          );
+        if (isRecaptcha) {
+          return solveRecaptcha(
+            args as unknown as z.infer<typeof recaptchaSchema>
+          );
+        }
+      }
+      if (!args.dial) {
+        throw new Error(
+          'No reCAPTCHA widget found, and `dial` was not given. Pass the dial selector for a rotation dial, or provider="recaptcha" on a reCAPTCHA page.'
+        );
+      }
+      if (!args.angleScript) {
+        throw new Error(
+          '`angleScript` is required for the rotation-dial provider — it returns the next angle.'
+        );
+      }
+      const angleScript = args.angleScript;
 
       if (!args.successScript && !args.judgeScript) {
         throw new Error(
@@ -443,7 +492,7 @@ export default function captcha(server: FastMCP): void {
 
           const aimAndDrag = async (seed?: AngleAnswer) => {
             const out =
-              seed ?? ((await frame.evaluate(args.angleScript)) as unknown);
+              seed ?? ((await frame.evaluate(angleScript)) as unknown);
             const next = (
               typeof out === 'number' ? { angle: out } : (out ?? {})
             ) as AngleAnswer;
@@ -620,7 +669,7 @@ export default function captcha(server: FastMCP): void {
           // One solve up front, so a fit that is not worth dragging can be
           // gated before the press. The press itself is absolute: from the
           // live start angle to this answer in one drag.
-          const first = (await frame.evaluate(args.angleScript)) as unknown;
+          const first = (await frame.evaluate(angleScript)) as unknown;
           const seed = (
             typeof first === 'number' ? { angle: first } : (first ?? {})
           ) as AngleAnswer;
