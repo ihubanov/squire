@@ -37,8 +37,17 @@ jobs:
       - run: npm run build
         name: Build
 
-      # The web tests drive a real Chromium.
-      - run: npx playwright install --with-deps chromium
+      # The web tests drive a real Chromium. --with-deps runs apt, and the
+      # Ubuntu mirrors intermittently fail DNS on hosted runners; retry so a
+      # mirror blip does not red the whole run.
+      - name: Install Chromium for the web tests
+        run: |
+          for attempt in 1 2 3 4; do
+            if npx playwright install --with-deps chromium; then exit 0; fi
+            echo "attempt $attempt failed; retrying in $((attempt * 20))s"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Run Unit Tests
         run: npm run test
