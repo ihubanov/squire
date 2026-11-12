@@ -17,6 +17,10 @@ import {
 } from '@jest/globals';
 import type { Browser, Page } from 'playwright';
 
+// Without this the tool would pick up a machine-local hunch config and send
+// the blank fixture tiles to a vision endpoint. Tests pin the no-vision path.
+process.env.APPIUM_MCP_CAPTCHA_VLM = '0';
+
 await jest.unstable_mockModule('../activity-log', () => ({
   logActivity: jest.fn(async () => {}),
 }));
@@ -230,6 +234,97 @@ describe('playwright_captcha_recaptcha', () => {
     expect(payload.challenge.tiles[4].imageX).toBeGreaterThan(0);
     // The capture is of the grid, not the whole page.
     expect(payload.challenge.imageBox.width).toBeLessThanOrEqual(420);
+  }, 30_000);
+
+  test('a reasoning-only vision reply is still read', async () => {
+    process.env.APPIUM_MCP_CAPTCHA_VLM = '1';
+    process.env.APPIUM_MCP_CAPTCHA_VLM_URL = 'http://vision.test/v1';
+    const spy = jest.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: null,
+                  reasoning:
+                    'Looking at the tiles, images 2 and 5 hold the object.\n{"select":[2,5]}',
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        )
+    );
+    try {
+      await load(
+        HOST(
+          `window.__scenario.check = () => openChallenge(${js(GRID)});
+           window.__scenario.verify = () => setTimeout(() => setToken('tok-vision'), 100);`
+        )
+      );
+      const res = await execs.playwright_captcha_recaptcha({
+        verifyMs: 3000,
+        maxAttempts: 1,
+      });
+      const text = res.content[0].text as string;
+      expect(text).toMatch(/^Captcha recaptcha v2: pass/);
+      expect(text).toContain('vision selected 2,5');
+    } finally {
+      spy.mockRestore();
+      process.env.APPIUM_MCP_CAPTCHA_VLM = '0';
+      delete process.env.APPIUM_MCP_CAPTCHA_VLM_URL;
+    }
+  }, 30_000);
+
+  test('the vision endpoint picks the tiles and the token passes', async () => {
+    process.env.APPIUM_MCP_CAPTCHA_VLM = '1';
+    process.env.APPIUM_MCP_CAPTCHA_VLM_URL = 'http://vision.test/v1';
+    const calls: string[] = [];
+    const bodies: any[] = [];
+    const spy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (url: unknown, init?: any) => {
+        calls.push(String(url));
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: '{"select":[1,4]}' } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+    try {
+      await load(
+        HOST(
+          `window.__scenario.check = () => openChallenge(${js(GRID)});
+           window.__scenario.verify = () => setTimeout(() => setToken('tok-vision'), 100);`
+        )
+      );
+      const res = await execs.playwright_captcha_recaptcha({
+        verifyMs: 3000,
+        maxAttempts: 1,
+      });
+      const text = res.content[0].text as string;
+      expect(text).toMatch(/^Captcha recaptcha v2: pass/);
+      expect(calls[0]).toBe('http://vision.test/v1/chat/completions');
+      // One whole-grid image with the challenge named, not per-tile crops:
+      // a model that sees only crops cannot tell what to look for.
+      expect(bodies[0].messages[0].content).toHaveLength(2);
+      expect(bodies[0].messages[0].content[0].text).toContain(
+        'Challenge instruction: "Select all images with a bus"'
+      );
+      expect(bodies[0].messages[0].content[1].type).toBe('image_url');
+      const selected = await page.evaluate(
+        () => (window as any).__selected as number[]
+      );
+      expect(selected.sort((a, b) => a - b)).toEqual([1, 4]);
+      expect(text).toContain('vision selected 1,4');
+    } finally {
+      spy.mockRestore();
+      process.env.APPIUM_MCP_CAPTCHA_VLM = '0';
+      delete process.env.APPIUM_MCP_CAPTCHA_VLM_URL;
+    }
   }, 30_000);
 
   test('tilesScript presses the chosen tile and the token passes', async () => {

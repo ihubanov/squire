@@ -1,22 +1,25 @@
 /**
- * Google reCAPTCHA solver: v2 checkbox + image/audio challenge capture, and
- * v3 token capture. Behind APPIUM_MCP_CAPTCHA.
+ * Google reCAPTCHA solver: v2 checkbox + image/audio challenge, and v3 token
+ * capture. Behind APPIUM_MCP_CAPTCHA; also reachable through
+ * playwright_captcha_solve with provider="recaptcha".
  *
- * The tool never pretends to see the pictures. On a grid it screenshots the
- * challenge and returns the PNG plus every tile's geometry, so the caller's
- * vision (or a caller-supplied tilesScript) picks the tiles. Audio clips are
- * downloaded and handed to an external audioScript for transcription; no
- * local ASR dependency is shipped.
+ * On an image grid the tool classes the tiles with the configured vision
+ * endpoint (see captcha-vision.ts), presses the matching ones, verifies, and
+ * re-solves each fresh round until a token appears. Without a vision endpoint
+ * it falls back to returning the PNG and every tile's geometry as
+ * `needs_answer`, exactly as before; a caller-supplied `tiles` or
+ * `tilesScript` always wins. Audio clips are downloaded and handed to an
+ * external audioScript for transcription; no local ASR dependency is shipped.
  *
  * v3 is passive: a token is captured and returned, but the score is only
  * evaluated server-side, so the result is always "unverified — no score
  * assertion", never a claimed pass.
  *
  * Manual run recipe (APPlUM_MCP_CAPTCHA=1, a web session on the demo page):
- *   v2 always-challenge key on https://www.google.com/recaptcha/api2/demo
- *   (sitekey 6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe) — call, read the
- *   returned challenge image/tiles, choose the matching tiles, call again
- *   with `tiles` (or supply tilesScript up front).
+ *   v2 on https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php — the
+ *   real Google demo, a fresh session gets an image grid. Call and it solves.
+ *   v2 always-challenge key (sitekey
+ *   6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe) on a fixture page.
  *   v3 on https://recaptcha-demo.appspot.com/recaptcha-v3-verify.php with
  *   sitekey 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI (test key: always a
  *   token, score is returned by the demo backend, not by this tool).
@@ -29,6 +32,7 @@ import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
 import { cueText } from '../../watch.js';
+import { pickTiles, visionConfig } from './captcha-vision.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -102,6 +106,10 @@ type Challenge = GridCapture | AudioCapture;
 const ANCHOR_SELECTOR = 'iframe[title="reCAPTCHA"]';
 const ANCHOR_ANY_SELECTOR = 'iframe[title*="reCAPTCHA"]';
 const CHALLENGE_SELECTOR = 'iframe[title*="challenge" i]';
+/** The grid panel. Google's live DOM uses this; `.rc-imageselect` is only
+ *  the jest fixture's shorthand and does not exist in the real widget. */
+const GRID_PANEL =
+  '.rc-imageselect-payload, #rc-imageselect-target, .rc-imageselect';
 const ANCHOR_CHECKBOX = '#recaptcha-anchor, .recaptcha-checkbox-border';
 const VERIFY_BUTTON = '#recaptcha-verify-button';
 const RELOAD_BUTTON = '#recaptcha-reload-button';
@@ -217,6 +225,21 @@ async function readPrompt(frame: Frame): Promise<string> {
   }
 }
 
+/**
+ * The instruction sentence alone. Google appends a hint ("If there are none,
+ * click skip" / "Click verify once there are none left") inside the same
+ * element, and a vision prompt reads better without it.
+ */
+export function cleanPrompt(text: string): string {
+  return text
+    .replace(
+      /\s*(?:If there are none,?\s*click skip|Click verify once there are none left)\s*$/i,
+      ''
+    )
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function errorText(anchor: Frame | null, frame: Frame | null) {
   const parts: string[] = [];
   if (anchor) {
@@ -244,574 +267,646 @@ async function errorText(anchor: Frame | null, frame: Frame | null) {
 }
 
 /** Registers playwright_captcha_recaptcha. */
-export default function captchaRecaptcha(server: FastMCP): void {
-  const schema = z.object({
-    mode: z
-      .enum(['auto', 'v2', 'v3'])
-      .optional()
-      .describe(
-        'Challenge kind. "auto" (default) uses v2 when an anchor iframe exists and v3 when only grecaptcha is exposed. "v2" covers checkbox, image grid and the audio fallback. "v3" is passive: it executes and returns a token, never a pass.'
-      ),
-    sitekey: z
-      .string()
-      .optional()
-      .describe(
-        'reCAPTCHA sitekey, needed only for v3/invisible where it cannot be read from the page. Google test keys: v2 always passes 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI; v2 always challenges 6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe; v3 uses the first.'
-      ),
-    action: z
-      .string()
-      .optional()
-      .describe('v3 action name (default "submit").'),
-    enterprise: z
-      .boolean()
-      .optional()
-      .describe('Use grecaptcha.enterprise instead of grecaptcha (v3).'),
-    frame: z
-      .union([z.string(), z.number().int().min(0)])
-      .optional()
-      .describe(
-        'Frame override for the anchor when auto-discovery is ambiguous (index or URL substring, from playwright_frames).'
-      ),
-    tiles: z
-      .array(z.number().int().min(0))
-      .optional()
-      .describe(
-        'Tile indices (0-based, row-major) to press for the current grid image. Usually taken from a previous call that returned the challenge and `needs_answer`.'
-      ),
-    tilesScript: z
-      .string()
-      .optional()
-      .describe(
-        'JS run inside the challenge frame with { image, width, height, tiles, prompt, attempt }. Understands the returned capture and presses the chosen tiles, and may return an array of tile indices instead (the tool then presses them). It should press #recaptcha-verify-button when it is done pressing; returning an array makes the tool press tiles and verify. The loop captures again after a rejected selection, up to 5 retries.'
-      ),
-    audio: z
-      .boolean()
-      .optional()
-      .describe(
-        'Prefer the audio challenge instead of the image grid. Without audioScript the clip URL is returned for the caller.'
-      ),
-    audioScript: z
-      .string()
-      .optional()
-      .describe(
-        'JS run inside the challenge frame with { url, attempt }; downloads/transcribes the audio clip and returns the text. The tool fills #audio-response and presses verify.'
-      ),
-    maxAttempts: z
-      .number()
-      .int()
-      .min(1)
-      .max(10)
-      .optional()
-      .describe('Challenge retry cap (default 5, as asked).'),
-    maxMs: z
-      .number()
-      .int()
-      .min(5_000)
-      .optional()
-      .describe('Wall-clock cap for the whole call (default 90000).'),
-    verifyMs: z
-      .number()
-      .int()
-      .min(1_000)
-      .optional()
-      .describe('How long to wait for a token after a press (default 8000).'),
-  });
+export const recaptchaSchema = z.object({
+  mode: z
+    .enum(['auto', 'v2', 'v3'])
+    .optional()
+    .describe(
+      'Challenge kind. "auto" (default) uses v2 when an anchor iframe exists and v3 when only grecaptcha is exposed. "v2" covers checkbox, image grid and the audio fallback. "v3" is passive: it executes and returns a token, never a pass.'
+    ),
+  sitekey: z
+    .string()
+    .optional()
+    .describe(
+      'reCAPTCHA sitekey, needed only for v3/invisible where it cannot be read from the page. Google test keys: v2 always passes 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI; v2 always challenges 6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe; v3 uses the first.'
+    ),
+  action: z.string().optional().describe('v3 action name (default "submit").'),
+  enterprise: z
+    .boolean()
+    .optional()
+    .describe('Use grecaptcha.enterprise instead of grecaptcha (v3).'),
+  frame: z
+    .union([z.string(), z.number().int().min(0)])
+    .optional()
+    .describe(
+      'Frame override for the anchor when auto-discovery is ambiguous (index or URL substring, from playwright_frames).'
+    ),
+  tiles: z
+    .array(z.number().int().min(0))
+    .optional()
+    .describe(
+      'Tile indices (0-based, row-major) to press for the current grid image. Usually taken from a previous call that returned the challenge and `needs_answer`.'
+    ),
+  tilesScript: z
+    .string()
+    .optional()
+    .describe(
+      'JS run inside the challenge frame with { image, width, height, tiles, prompt, attempt }. Understands the returned capture and presses the chosen tiles, and may return an array of tile indices instead (the tool then presses them). It should press #recaptcha-verify-button when it is done pressing; returning an array makes the tool press tiles and verify. The loop captures again after a rejected selection, up to 5 retries.'
+    ),
+  audio: z
+    .boolean()
+    .optional()
+    .describe(
+      'Prefer the audio challenge instead of the image grid. Without audioScript the clip URL is returned for the caller.'
+    ),
+  audioScript: z
+    .string()
+    .optional()
+    .describe(
+      'JS run inside the challenge frame with { url, attempt }; downloads/transcribes the audio clip and returns the text. The tool fills #audio-response and presses verify.'
+    ),
+  maxAttempts: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe('Challenge retry cap (default 5, as asked).'),
+  maxMs: z
+    .number()
+    .int()
+    .min(5_000)
+    .optional()
+    .describe('Wall-clock cap for the whole call (default 90000).'),
+  verifyMs: z
+    .number()
+    .int()
+    .min(1_000)
+    .optional()
+    .describe('How long to wait for a token after a press (default 8000).'),
+  vision: z
+    .boolean()
+    .optional()
+    .describe(
+      'Solve image grids with the configured vision endpoint instead of returning them as `needs_answer` (default: on when APPIUM_MCP_CAPTCHA_VLM_URL or a claude-local hunch config is present). A caller-supplied `tiles`/`tilesScript` still wins.'
+    ),
+  visionMs: z
+    .number()
+    .int()
+    .min(5_000)
+    .optional()
+    .describe('Timeout for one vision classification call (default 45000).'),
+});
 
-  server.addTool({
-    name: 'playwright_captcha_recaptcha',
-    description:
-      'Solve a Google reCAPTCHA v2 (checkbox, then image grid or audio) and capture v3 tokens. Clicks the checkbox with real pointer moves; on a grid it returns a PNG of the challenge plus every tile box so your vision picks tiles, then accepts `tiles` (or a tilesScript/audioScript) to press them and verify. Retries a rejected grid up to 5 times in 90 s and maps "challenge expired", "Try again later" and anchor alerts to typed failures. Audio is captured and handed to an external transcription hook. v3 is always reported "unverified — no score assertion". Manual check with Google test keys: v2 always-challenge on https://www.google.com/recaptcha/api2/demo (sitekey 6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe), v3 on https://recaptcha-demo.appspot.com/recaptcha-v3-verify.php (sitekey 6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI).',
-    parameters: schema,
-    annotations: { readOnlyHint: false, openWorldHint: false },
-    execute: async (args: z.infer<typeof schema>): Promise<ContentResult> => {
-      const driver = getDriver();
-      if (!driver || !isPlaywrightDriverSession(driver)) {
+/**
+ * Skips the checkbox, solves the challenge, and returns a token when the page
+ * accepts it. Shared by playwright_captcha_recaptcha and the provider dispatch
+ * in playwright_captcha_solve.
+ */
+export async function solveRecaptcha(
+  args: z.infer<typeof recaptchaSchema>
+): Promise<ContentResult> {
+  const driver = getDriver();
+  if (!driver || !isPlaywrightDriverSession(driver)) {
+    throw new RecaptchaError(
+      'no_session',
+      'No Playwright web session found. Create a session with platform="web" first.'
+    );
+  }
+  const page = driver.page;
+  assertNotProtected(page.url(), 'drive a captcha in');
+  await assertNotUserFocused(page, 'drive a captcha in');
+
+  const mode = args.mode ?? 'auto';
+  const maxAttempts = args.maxAttempts ?? 5;
+  const maxMs = args.maxMs ?? 90_000;
+  const verifyMs = args.verifyMs ?? 8000;
+  const vision = args.vision === false ? null : visionConfig();
+  const started = Date.now();
+  const log: string[] = [];
+  let lastFailure: RecaptchaError | undefined;
+  let anchor: Frame | null = null;
+
+  const mainEval = <T>(fn: string | ((a: never) => T), arg?: unknown) =>
+    arg === undefined
+      ? page.mainFrame().evaluate(fn as never)
+      : page.mainFrame().evaluate(fn as never, arg as never);
+
+  const resolveAnchor = async (): Promise<Frame> => {
+    if (args.frame !== undefined) {
+      return driver.resolveFrame(page, args.frame);
+    }
+    const locator = page.mainFrame().locator(ANCHOR_SELECTOR).first();
+    let handle = (await locator.count()) ? await locator.elementHandle() : null;
+    if (!handle) {
+      handle = await page
+        .mainFrame()
+        .locator(ANCHOR_ANY_SELECTOR)
+        .first()
+        .elementHandle();
+    }
+    if (!handle) {
+      throw new RecaptchaError(
+        'widget_missing',
+        'no reCAPTCHA anchor iframe — is the widget rendered, or is this a v3 page?'
+      );
+    }
+    const frame = await handle.contentFrame();
+    if (!frame) {
+      throw new RecaptchaError(
+        'widget_missing',
+        'anchor iframe has no content frame yet'
+      );
+    }
+    return frame;
+  };
+
+  const resolveChallenge = async (): Promise<Frame | null> => {
+    const locator = page.mainFrame().locator(CHALLENGE_SELECTOR).first();
+    // count() is immediate; elementHandle() alone waits 30 s, which would
+    // make every "no challenge yet" poll block for the whole test budget.
+    if (!(await locator.count())) {
+      return null;
+    }
+    const handle = await locator.elementHandle();
+    if (!handle) {
+      return null;
+    }
+    return handle.contentFrame();
+  };
+
+  const finish = (
+    status: 'pass' | 'unverified' | 'needs_answer' | 'not_solved',
+    tokenValue: string,
+    mode: string,
+    _log: string[],
+    _started: number,
+    failure: RecaptchaError | undefined,
+    extra: Record<string, unknown> = {}
+  ): ContentResult => {
+    logActivity({
+      tool: 'playwright_captcha_recaptcha',
+      tab: page.url(),
+      status: status === 'pass' || status === 'unverified' ? 'ok' : 'error',
+      detail: `${status}${failure ? ` — ${failure.code}` : ''}`,
+    });
+    return result(status, tokenValue, mode, log, started, failure, extra);
+  };
+
+  const token = async (): Promise<string> =>
+    String((await mainEval(READ_TOKEN)) ?? '');
+
+  const waitToken = async (ms: number): Promise<string> => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      const t = await token().catch(() => '');
+      if (t) {
+        return t;
+      }
+      await sleep(150);
+    }
+    return '';
+  };
+
+  const clickIn = async (frame: Frame, selector: string, why: string) => {
+    const box = await boxOf(frame, selector);
+    await cueText(
+      page,
+      why,
+      'click',
+      { x: box.x, y: box.y, w: box.width, h: box.height },
+      700
+    );
+    await humanClick(page, box);
+  };
+
+  const capture = async (frame: Frame): Promise<Challenge | null> => {
+    if (await present(frame, GRID_PANEL, 4000)) {
+      const tileSelector = await chooseSelector(frame);
+      const imageBox = await boxOf(frame, GRID_PANEL);
+      const prompt = cleanPrompt(await readPrompt(frame));
+      const scroll = (await mainEval(() => ({
+        x: window.scrollX,
+        y: window.scrollY,
+      }))) as { x: number; y: number };
+      const clip = {
+        x: Math.max(0, Math.floor(imageBox.x + scroll.x)),
+        y: Math.max(0, Math.floor(imageBox.y + scroll.y)),
+        width: Math.max(1, Math.ceil(imageBox.width)),
+        height: Math.max(1, Math.ceil(imageBox.height)),
+      };
+      const png = await page.screenshot({ clip, type: 'png' });
+      const tiles: Tile[] = [];
+      const handles = frame.locator(tileSelector);
+      const n = await handles.count();
+      for (let i = 0; i < n; i++) {
+        const handle = await handles.nth(i).elementHandle();
+        const b = await handle?.boundingBox();
+        if (!b) {
+          continue;
+        }
+        tiles.push({
+          index: i,
+          ...b,
+          imageX: b.x - imageBox.x,
+          imageY: b.y - imageBox.y,
+        });
+      }
+      return {
+        type: 'grid',
+        frame,
+        prompt,
+        image: `data:image/png;base64,${png.toString('base64')}`,
+        imageBox,
+        tiles,
+      };
+    }
+    if (await present(frame, '.rc-audiochallenge', 1000)) {
+      const prompt = await readPrompt(frame);
+      const link = frame.locator(AUDIO_DOWNLOAD).first();
+      const url = (await link.count())
+        ? await link.getAttribute('href')
+        : (await present(frame, 'audio', 1000))
+          ? await frame.locator('audio').first().getAttribute('src')
+          : null;
+      if (!url) {
         throw new RecaptchaError(
-          'no_session',
-          'No Playwright web session found. Create a session with platform="web" first.'
+          'audio_unavailable',
+          'audio challenge shown but no clip URL found'
         );
       }
-      const page = driver.page;
-      assertNotProtected(page.url(), 'drive a captcha in');
-      await assertNotUserFocused(page, 'drive a captcha in');
+      return { type: 'audio', frame, prompt, url };
+    }
+    return null;
+  };
 
-      const mode = args.mode ?? 'auto';
-      const maxAttempts = args.maxAttempts ?? 5;
-      const maxMs = args.maxMs ?? 90_000;
-      const verifyMs = args.verifyMs ?? 8000;
-      const started = Date.now();
-      const log: string[] = [];
-      let lastFailure: RecaptchaError | undefined;
-      let anchor: Frame | null = null;
+  const reload = async (frame: Frame) => {
+    if (await present(frame, RELOAD_BUTTON, 1000)) {
+      await clickIn(frame, RELOAD_BUTTON, 'reload challenge');
+      await sleep(300);
+    }
+  };
 
-      const mainEval = <T>(fn: string | ((a: never) => T), arg?: unknown) =>
-        arg === undefined
-          ? page.mainFrame().evaluate(fn as never)
-          : page.mainFrame().evaluate(fn as never, arg as never);
-
-      const resolveAnchor = async (): Promise<Frame> => {
-        if (args.frame !== undefined) {
-          return driver.resolveFrame(page, args.frame);
-        }
-        const locator = page.mainFrame().locator(ANCHOR_SELECTOR).first();
-        let handle = (await locator.count())
-          ? await locator.elementHandle()
-          : null;
-        if (!handle) {
-          handle = await page
-            .mainFrame()
-            .locator(ANCHOR_ANY_SELECTOR)
-            .first()
-            .elementHandle();
-        }
-        if (!handle) {
-          throw new RecaptchaError(
-            'widget_missing',
-            'no reCAPTCHA anchor iframe — is the widget rendered, or is this a v3 page?'
-          );
-        }
-        const frame = await handle.contentFrame();
-        if (!frame) {
-          throw new RecaptchaError(
-            'widget_missing',
-            'anchor iframe has no content frame yet'
-          );
-        }
-        return frame;
+  /** Maps challenge text to a typed failure and a retry decision. */
+  const classify = async (
+    frame: Frame
+  ): Promise<{ retry: boolean; error?: RecaptchaError }> => {
+    const text = await errorText(anchor, frame);
+    if (/try again later/i.test(text)) {
+      return {
+        retry: false,
+        error: new RecaptchaError(
+          'bot_suspected',
+          'reCAPTCHA says "Try again later" — the session is suspected'
+        ),
       };
-
-      const resolveChallenge = async (): Promise<Frame | null> => {
-        const locator = page.mainFrame().locator(CHALLENGE_SELECTOR).first();
-        // count() is immediate; elementHandle() alone waits 30 s, which would
-        // make every "no challenge yet" poll block for the whole test budget.
-        if (!(await locator.count())) {
-          return null;
-        }
-        const handle = await locator.elementHandle();
-        if (!handle) {
-          return null;
-        }
-        return handle.contentFrame();
+    }
+    if (/verification challenge expired/i.test(text)) {
+      return {
+        retry: true,
+        error: new RecaptchaError(
+          'challenge_expired',
+          'verification challenge expired'
+        ),
       };
-
-      const finish = (
-        status: 'pass' | 'unverified' | 'needs_answer' | 'not_solved',
-        tokenValue: string,
-        mode: string,
-        _log: string[],
-        _started: number,
-        failure: RecaptchaError | undefined,
-        extra: Record<string, unknown> = {}
-      ): ContentResult => {
-        logActivity({
-          tool: 'playwright_captcha_recaptcha',
-          tab: page.url(),
-          status: status === 'pass' || status === 'unverified' ? 'ok' : 'error',
-          detail: `${status}${failure ? ` — ${failure.code}` : ''}`,
-        });
-        return result(status, tokenValue, mode, log, started, failure, extra);
+    }
+    if (/please select all matching images|select all/i.test(text)) {
+      return {
+        retry: true,
+        error: new RecaptchaError(
+          'tiles_rejected',
+          'selection rejected — the grid stays open'
+        ),
       };
+    }
+    if (anchor && /there was an error|rc-anchor-alert/i.test(text)) {
+      return {
+        retry: true,
+        error: new RecaptchaError('anchor_alert', 'anchor reported an error'),
+      };
+    }
+    return { retry: true };
+  };
 
-      const token = async (): Promise<string> =>
-        String((await mainEval(READ_TOKEN)) ?? '');
+  try {
+    if (mode === 'v3') {
+      return await runV3(page, args, log, started);
+    }
 
-      const waitToken = async (ms: number): Promise<string> => {
-        const deadline = Date.now() + ms;
-        while (Date.now() < deadline) {
+    const hasAnchor = await page
+      .mainFrame()
+      .locator(ANCHOR_ANY_SELECTOR)
+      .count();
+    const hasGrecaptcha = Boolean(await mainEval(() => 'grecaptcha' in window));
+    // A v3 badge is itself an iframe titled "reCAPTCHA", so v3 wins in
+    // auto only when no real v2 widget container exists.
+    const hasV2Widget = Boolean(
+      await page.mainFrame().locator('.g-recaptcha, [data-sitekey]').count()
+    );
+    if (mode === 'auto' && !hasV2Widget && hasGrecaptcha) {
+      return await runV3(page, args, log, started);
+    }
+    if (!hasAnchor) {
+      throw new RecaptchaError(
+        'widget_missing',
+        'no reCAPTCHA widget on the page (no anchor iframe and no grecaptcha)'
+      );
+    }
+
+    // v2 invisible: no checkbox to click, execute returns the token.
+    if (
+      mode !== 'v2' &&
+      (await page
+        .mainFrame()
+        .locator('[data-size="invisible"], .g-recaptcha[data-size="invisible"]')
+        .count())
+    ) {
+      const t = await executeInvisible(page, args);
+      return finish('pass', t, 'v2-invisible', log, started, undefined);
+    }
+
+    let attempt = 1;
+    for (; attempt <= maxAttempts; attempt++) {
+      if (Date.now() - started > maxMs) {
+        lastFailure = new RecaptchaError('timeout', 'wall-clock cap hit');
+        break;
+      }
+      anchor = await resolveAnchor();
+
+      // A round after the first leaves the challenge frame open while a
+      // new grid loads; clicking the anchor again would only add noise.
+      // On a freshly reloaded page the iframe can linger with no content
+      // and an unchecked anchor, which is not an open challenge: the
+      // checkbox still has to be pressed.
+      let challengeFrame = await resolveChallenge();
+      if (
+        challengeFrame &&
+        !(await anchorChecked(anchor)) &&
+        !(await present(challengeFrame, GRID_PANEL, 800)) &&
+        !(await countOf(challengeFrame, AUDIO_BUTTON))
+      ) {
+        log.push(
+          `attempt ${attempt}: challenge frame present but empty — pressing the checkbox`
+        );
+        challengeFrame = null;
+      }
+      if (challengeFrame) {
+        log.push(`attempt ${attempt}: challenge frame already open`);
+      } else {
+        // Click the checkbox unless a previous attempt already settled it.
+        if (!(await anchorChecked(anchor))) {
+          await clickIn(anchor, ANCHOR_CHECKBOX, 'reCAPTCHA checkbox');
+          log.push(`attempt ${attempt}: clicked the anchor checkbox`);
+        } else {
+          log.push(`attempt ${attempt}: anchor already checked`);
+        }
+
+        // Either the checkbox settles or a challenge frame opens.
+        const settleDeadline = Date.now() + Math.min(verifyMs, 6000);
+        while (Date.now() < settleDeadline) {
           const t = await token().catch(() => '');
-          if (t) {
-            return t;
-          }
-          await sleep(150);
-        }
-        return '';
-      };
-
-      const clickIn = async (frame: Frame, selector: string, why: string) => {
-        const box = await boxOf(frame, selector);
-        await cueText(
-          page,
-          why,
-          'click',
-          { x: box.x, y: box.y, w: box.width, h: box.height },
-          700
-        );
-        await humanClick(page, box);
-      };
-
-      const capture = async (frame: Frame): Promise<Challenge | null> => {
-        if (await present(frame, '.rc-imageselect', 4000)) {
-          const tileSelector = await chooseSelector(frame);
-          const imageBox = await boxOf(frame, '.rc-imageselect');
-          const prompt = await readPrompt(frame);
-          const scroll = (await mainEval(() => ({
-            x: window.scrollX,
-            y: window.scrollY,
-          }))) as { x: number; y: number };
-          const clip = {
-            x: Math.max(0, Math.floor(imageBox.x + scroll.x)),
-            y: Math.max(0, Math.floor(imageBox.y + scroll.y)),
-            width: Math.max(1, Math.ceil(imageBox.width)),
-            height: Math.max(1, Math.ceil(imageBox.height)),
-          };
-          const png = await page.screenshot({ clip, type: 'png' });
-          const tiles: Tile[] = [];
-          const handles = frame.locator(tileSelector);
-          const n = await handles.count();
-          for (let i = 0; i < n; i++) {
-            const handle = await handles.nth(i).elementHandle();
-            const b = await handle?.boundingBox();
-            if (!b) {
-              continue;
-            }
-            tiles.push({
-              index: i,
-              ...b,
-              imageX: b.x - imageBox.x,
-              imageY: b.y - imageBox.y,
-            });
-          }
-          return {
-            type: 'grid',
-            frame,
-            prompt,
-            image: `data:image/png;base64,${png.toString('base64')}`,
-            imageBox,
-            tiles,
-          };
-        }
-        if (await present(frame, '.rc-audiochallenge', 1000)) {
-          const prompt = await readPrompt(frame);
-          const link = frame.locator(AUDIO_DOWNLOAD).first();
-          const url = (await link.count())
-            ? await link.getAttribute('href')
-            : (await present(frame, 'audio', 1000))
-              ? await frame.locator('audio').first().getAttribute('src')
-              : null;
-          if (!url) {
-            throw new RecaptchaError(
-              'audio_unavailable',
-              'audio challenge shown but no clip URL found'
-            );
-          }
-          return { type: 'audio', frame, prompt, url };
-        }
-        return null;
-      };
-
-      const reload = async (frame: Frame) => {
-        if (await present(frame, RELOAD_BUTTON, 1000)) {
-          await clickIn(frame, RELOAD_BUTTON, 'reload challenge');
-          await sleep(300);
-        }
-      };
-
-      /** Maps challenge text to a typed failure and a retry decision. */
-      const classify = async (
-        frame: Frame
-      ): Promise<{ retry: boolean; error?: RecaptchaError }> => {
-        const text = await errorText(anchor, frame);
-        if (/try again later/i.test(text)) {
-          return {
-            retry: false,
-            error: new RecaptchaError(
-              'bot_suspected',
-              'reCAPTCHA says "Try again later" — the session is suspected'
-            ),
-          };
-        }
-        if (/verification challenge expired/i.test(text)) {
-          return {
-            retry: true,
-            error: new RecaptchaError(
-              'challenge_expired',
-              'verification challenge expired'
-            ),
-          };
-        }
-        if (/please select all matching images|select all/i.test(text)) {
-          return {
-            retry: true,
-            error: new RecaptchaError(
-              'tiles_rejected',
-              'selection rejected — the grid stays open'
-            ),
-          };
-        }
-        if (anchor && /there was an error|rc-anchor-alert/i.test(text)) {
-          return {
-            retry: true,
-            error: new RecaptchaError(
-              'anchor_alert',
-              'anchor reported an error'
-            ),
-          };
-        }
-        return { retry: true };
-      };
-
-      try {
-        if (mode === 'v3') {
-          return await runV3(page, args, log, started);
-        }
-
-        const hasAnchor = await page
-          .mainFrame()
-          .locator(ANCHOR_ANY_SELECTOR)
-          .count();
-        const hasGrecaptcha = Boolean(
-          await mainEval(() => 'grecaptcha' in window)
-        );
-        // A v3 badge is itself an iframe titled "reCAPTCHA", so v3 wins in
-        // auto only when no real v2 widget container exists.
-        const hasV2Widget = Boolean(
-          await page.mainFrame().locator('.g-recaptcha, [data-sitekey]').count()
-        );
-        if (mode === 'auto' && !hasV2Widget && hasGrecaptcha) {
-          return await runV3(page, args, log, started);
-        }
-        if (!hasAnchor) {
-          throw new RecaptchaError(
-            'widget_missing',
-            'no reCAPTCHA widget on the page (no anchor iframe and no grecaptcha)'
-          );
-        }
-
-        // v2 invisible: no checkbox to click, execute returns the token.
-        if (
-          mode !== 'v2' &&
-          (await page
-            .mainFrame()
-            .locator(
-              '[data-size="invisible"], .g-recaptcha[data-size="invisible"]'
-            )
-            .count())
-        ) {
-          const t = await executeInvisible(page, args);
-          return finish('pass', t, 'v2-invisible', log, started, undefined);
-        }
-
-        let attempt = 1;
-        for (; attempt <= maxAttempts; attempt++) {
-          if (Date.now() - started > maxMs) {
-            lastFailure = new RecaptchaError('timeout', 'wall-clock cap hit');
-            break;
-          }
-          anchor = await resolveAnchor();
-
-          // Click the checkbox unless a previous attempt already settled it.
-          if (!(await anchorChecked(anchor))) {
-            await clickIn(anchor, ANCHOR_CHECKBOX, 'reCAPTCHA checkbox');
-            log.push(`attempt ${attempt}: clicked the anchor checkbox`);
-          } else {
-            log.push(`attempt ${attempt}: anchor already checked`);
-          }
-
-          // Either the checkbox settles or a challenge frame opens.
-          const settleDeadline = Date.now() + Math.min(verifyMs, 6000);
-          let challengeFrame: Frame | null = null;
-          while (Date.now() < settleDeadline) {
-            const t = await token().catch(() => '');
-            if (t) {
-              return finish('pass', t, 'v2', log, started, undefined);
-            }
-            challengeFrame = await resolveChallenge();
-            if (challengeFrame) {
-              break;
-            }
-            await sleep(150);
-          }
-
-          if (!challengeFrame) {
-            if (!(await anchorChecked(anchor))) {
-              const cls = await classify(anchor);
-              lastFailure =
-                cls.error ??
-                new RecaptchaError(
-                  'anchor_unchecked',
-                  'checkbox did not settle and no challenge opened'
-                );
-              log.push(`attempt ${attempt}: ${lastFailure.message}`);
-              continue;
-            }
-            const t = await waitToken(Math.min(verifyMs, 3000));
-            if (t) {
-              return finish('pass', t, 'v2', log, started, undefined);
-            }
-            lastFailure = new RecaptchaError(
-              'token_absent',
-              'anchor is checked but no token was set'
-            );
-            log.push(`attempt ${attempt}: checked, no token`);
-            continue;
-          }
-
-          // Audio is the fallback whenever the caller asks for it.
-          if (args.audio && (await countOf(challengeFrame, AUDIO_BUTTON))) {
-            await clickIn(challengeFrame, AUDIO_BUTTON, 'switch to audio');
-            await sleep(300);
-          }
-
-          const challenge = await capture(challengeFrame);
-          if (!challenge) {
-            lastFailure = new RecaptchaError(
-              'challenge_timeout',
-              'challenge frame opened but no grid or audio appeared'
-            );
-            log.push(`attempt ${attempt}: ${lastFailure.message}`);
-            continue;
-          }
-
-          if (challenge.type === 'audio') {
-            if (!args.audioScript) {
-              return finish('needs_answer', '', 'v2', log, started, undefined, {
-                status: 'needs_answer',
-                challenge: {
-                  type: 'audio',
-                  prompt: challenge.prompt,
-                  audioUrl: challenge.url,
-                },
-                failure: {
-                  code: 'audio_unavailable',
-                  message:
-                    'audio clip captured — pass audioScript to transcribe it',
-                },
-              });
-            }
-            let text: unknown;
-            try {
-              text = await challenge.frame.evaluate(
-                ({ code, url, attempt }) => {
-                  const v = (0, eval)(`(${code})`);
-                  return typeof v === 'function' ? v({ url, attempt }) : v;
-                },
-                { code: args.audioScript, url: challenge.url, attempt }
-              );
-              if (typeof text !== 'string' || !text.trim()) {
-                throw new Error(`audioScript returned ${JSON.stringify(text)}`);
-              }
-            } catch (err: any) {
-              lastFailure = new RecaptchaError(
-                'audio_failed',
-                `audioScript failed: ${err}`
-              );
-              log.push(`attempt ${attempt}: ${lastFailure.message}`);
-              await reload(challenge.frame);
-              continue;
-            }
-            await challenge.frame.locator(AUDIO_INPUT).fill(text.trim());
-            if (await present(challenge.frame, VERIFY_BUTTON, 2000)) {
-              await clickIn(challenge.frame, VERIFY_BUTTON, 'verify audio');
-            }
-            const t = await waitToken(verifyMs);
-            if (t) {
-              return finish('pass', t, 'v2', log, started, undefined);
-            }
-            const cls = await classify(challenge.frame);
-            lastFailure = cls.error;
-            log.push(`attempt ${attempt}: audio answer rejected`);
-            if (!cls.retry) {
-              break;
-            }
-            await reload(challenge.frame);
-            continue;
-          }
-
-          // Grid: no answer yet — hand the capture back to the caller.
-          if (!args.tiles && !args.tilesScript) {
-            return finish('needs_answer', '', 'v2', log, started, undefined, {
-              status: 'needs_answer',
-              challenge: {
-                type: 'grid',
-                prompt: challenge.prompt,
-                image: challenge.image,
-                imageBox: challenge.imageBox,
-                tiles: challenge.tiles,
-              },
-              failure: {
-                code: 'needs_answer',
-                message:
-                  'grid captured — pass `tiles` (or tilesScript) with the matching indices',
-              },
-            });
-          }
-
-          let pressVerify = true;
-          try {
-            pressVerify = await applyTiles(
-              page,
-              challenge,
-              args.tiles,
-              args.tilesScript,
-              log
-            );
-          } catch (err: any) {
-            lastFailure = new RecaptchaError(
-              'script_error',
-              `tilesScript failed: ${err}`
-            );
-            log.push(`attempt ${attempt}: ${lastFailure.code}`);
-            continue;
-          }
-          if (
-            pressVerify &&
-            (await present(challenge.frame, VERIFY_BUTTON, 2000))
-          ) {
-            await clickIn(challenge.frame, VERIFY_BUTTON, 'verify selection');
-          }
-          const t = await waitToken(verifyMs);
           if (t) {
             return finish('pass', t, 'v2', log, started, undefined);
           }
-
-          const cls = await classify(challenge.frame);
-          lastFailure = cls.error;
-          log.push(
-            `attempt ${attempt}: selection rejected` +
-              (cls.error ? ` (${cls.error.code})` : '')
-          );
-          if (!cls.retry) {
+          challengeFrame = await resolveChallenge();
+          if (challengeFrame) {
             break;
           }
-          if (cls.error?.code === 'challenge_expired') {
-            await reload(challenge.frame);
-          }
-          await sleep(250);
+          await sleep(150);
         }
-
-        if (!lastFailure && Date.now() - started > maxMs) {
-          lastFailure = new RecaptchaError('timeout', 'wall-clock cap hit');
-        }
-        // Exhausting the loop is the cap, whatever the last retryable reason
-        // was. A break (bot suspected, wall clock) keeps its own code.
-        if (attempt > maxAttempts) {
-          lastFailure = new RecaptchaError(
-            'retry_cap',
-            `no pass after ${maxAttempts} attempts` +
-              (lastFailure ? ` (last: ${lastFailure.code})` : '')
-          );
-        }
-        lastFailure ??= new RecaptchaError('retry_cap', 'no pass');
-        log.push(`stopped: ${lastFailure.code} — ${lastFailure.message}`);
-        return finish('not_solved', '', 'v2', log, started, lastFailure);
-      } catch (err: any) {
-        const failure =
-          err instanceof RecaptchaError
-            ? err
-            : new RecaptchaError('timeout', err?.toString?.() ?? String(err));
-        if (failure.code === 'widget_missing') {
-          logActivity({
-            tool: 'playwright_captcha_recaptcha',
-            tab: page.url(),
-            status: 'error',
-            detail: failure.message.slice(0, 200),
-          });
-          throw failure;
-        }
-        log.push(`stopped: ${failure.code} — ${failure.message}`);
-        return finish('not_solved', '', 'v2', log, started, failure);
       }
-    },
+
+      if (!challengeFrame) {
+        if (!(await anchorChecked(anchor))) {
+          const cls = await classify(anchor);
+          lastFailure =
+            cls.error ??
+            new RecaptchaError(
+              'anchor_unchecked',
+              'checkbox did not settle and no challenge opened'
+            );
+          log.push(`attempt ${attempt}: ${lastFailure.message}`);
+          continue;
+        }
+        const t = await waitToken(Math.min(verifyMs, 3000));
+        if (t) {
+          return finish('pass', t, 'v2', log, started, undefined);
+        }
+        lastFailure = new RecaptchaError(
+          'token_absent',
+          'anchor is checked but no token was set'
+        );
+        log.push(`attempt ${attempt}: checked, no token`);
+        continue;
+      }
+
+      // Audio is the fallback whenever the caller asks for it.
+      if (args.audio && (await countOf(challengeFrame, AUDIO_BUTTON))) {
+        await clickIn(challengeFrame, AUDIO_BUTTON, 'switch to audio');
+        await sleep(300);
+      }
+
+      // A fresh round fades the old grid out and the new tiles in; a
+      // capture taken mid-fade is blank tiles for the vision model.
+      if (attempt > 1) {
+        await sleep(600);
+      }
+      const challenge = await capture(challengeFrame);
+      if (!challenge) {
+        lastFailure = new RecaptchaError(
+          'challenge_timeout',
+          'challenge frame opened but no grid or audio appeared'
+        );
+        log.push(`attempt ${attempt}: ${lastFailure.message}`);
+        continue;
+      }
+
+      if (challenge.type === 'audio') {
+        if (!args.audioScript) {
+          return finish('needs_answer', '', 'v2', log, started, undefined, {
+            status: 'needs_answer',
+            challenge: {
+              type: 'audio',
+              prompt: challenge.prompt,
+              audioUrl: challenge.url,
+            },
+            failure: {
+              code: 'audio_unavailable',
+              message:
+                'audio clip captured — pass audioScript to transcribe it',
+            },
+          });
+        }
+        let text: unknown;
+        try {
+          text = await challenge.frame.evaluate(
+            ({ code, url, attempt }) => {
+              const v = (0, eval)(`(${code})`);
+              return typeof v === 'function' ? v({ url, attempt }) : v;
+            },
+            { code: args.audioScript, url: challenge.url, attempt }
+          );
+          if (typeof text !== 'string' || !text.trim()) {
+            throw new Error(`audioScript returned ${JSON.stringify(text)}`);
+          }
+        } catch (err: any) {
+          lastFailure = new RecaptchaError(
+            'audio_failed',
+            `audioScript failed: ${err}`
+          );
+          log.push(`attempt ${attempt}: ${lastFailure.message}`);
+          await reload(challenge.frame);
+          continue;
+        }
+        await challenge.frame.locator(AUDIO_INPUT).fill(text.trim());
+        if (await present(challenge.frame, VERIFY_BUTTON, 2000)) {
+          await clickIn(challenge.frame, VERIFY_BUTTON, 'verify audio');
+        }
+        const t = await waitToken(verifyMs);
+        if (t) {
+          return finish('pass', t, 'v2', log, started, undefined);
+        }
+        const cls = await classify(challenge.frame);
+        lastFailure = cls.error;
+        log.push(`attempt ${attempt}: audio answer rejected`);
+        if (!cls.retry) {
+          break;
+        }
+        await reload(challenge.frame);
+        continue;
+      }
+
+      // Grid: the caller's answer wins; otherwise ask the vision
+      // endpoint; otherwise hand the capture back.
+      let answerTiles = args.tiles;
+      if (!answerTiles && !args.tilesScript && vision) {
+        const cols =
+          new Set(
+            challenge.tiles
+              .filter((t) => t.imageY === challenge.tiles[0].imageY)
+              .map((t) => t.imageX)
+          ).size || 3;
+        const rows = Math.ceil(challenge.tiles.length / cols);
+        log.push(
+          `  asking vision (${vision.model}) about a ${rows}x${cols} grid`
+        );
+        const picked = await pickTiles({
+          config: vision,
+          prompt: challenge.prompt,
+          image: challenge.image,
+          rows,
+          cols,
+          timeoutMs: args.visionMs,
+        }).catch((err: any) => {
+          log.push(`  vision call failed: ${err?.message ?? err}`);
+          return null;
+        });
+        if (picked) {
+          answerTiles = picked
+            .map((k) => challenge.tiles[k]?.index)
+            .filter((v): v is number => typeof v === 'number');
+          log.push(
+            `  vision selected ${answerTiles.length ? answerTiles.join(',') : 'none'}`
+          );
+        } else {
+          log.push('  vision gave no usable answer');
+        }
+      }
+      if (!answerTiles && !args.tilesScript) {
+        return finish('needs_answer', '', 'v2', log, started, undefined, {
+          status: 'needs_answer',
+          challenge: {
+            type: 'grid',
+            prompt: challenge.prompt,
+            image: challenge.image,
+            imageBox: challenge.imageBox,
+            tiles: challenge.tiles,
+          },
+          failure: {
+            code: 'needs_answer',
+            message: vision
+              ? 'vision returned no usable tile selection — pass `tiles` (or tilesScript), or retry'
+              : 'grid captured — pass `tiles` (or tilesScript) with the matching indices, or configure a vision endpoint',
+          },
+        });
+      }
+
+      let pressVerify = true;
+      try {
+        pressVerify = await applyTiles(
+          page,
+          challenge,
+          answerTiles,
+          args.tilesScript,
+          log
+        );
+      } catch (err: any) {
+        lastFailure = new RecaptchaError(
+          'script_error',
+          `tilesScript failed: ${err}`
+        );
+        log.push(`attempt ${attempt}: ${lastFailure.code}`);
+        continue;
+      }
+      if (
+        pressVerify &&
+        (await present(challenge.frame, VERIFY_BUTTON, 2000))
+      ) {
+        await clickIn(challenge.frame, VERIFY_BUTTON, 'verify selection');
+      }
+      const t = await waitToken(verifyMs);
+      if (t) {
+        return finish('pass', t, 'v2', log, started, undefined);
+      }
+
+      const cls = await classify(challenge.frame);
+      lastFailure = cls.error;
+      log.push(
+        `attempt ${attempt}: selection rejected` +
+          (cls.error ? ` (${cls.error.code})` : '')
+      );
+      if (!cls.retry) {
+        break;
+      }
+      if (cls.error?.code === 'challenge_expired') {
+        await reload(challenge.frame);
+      }
+      await sleep(250);
+    }
+
+    if (!lastFailure && Date.now() - started > maxMs) {
+      lastFailure = new RecaptchaError('timeout', 'wall-clock cap hit');
+    }
+    // Exhausting the loop is the cap, whatever the last retryable reason
+    // was. A break (bot suspected, wall clock) keeps its own code.
+    if (attempt > maxAttempts) {
+      lastFailure = new RecaptchaError(
+        'retry_cap',
+        `no pass after ${maxAttempts} attempts` +
+          (lastFailure ? ` (last: ${lastFailure.code})` : '')
+      );
+    }
+    lastFailure ??= new RecaptchaError('retry_cap', 'no pass');
+    log.push(`stopped: ${lastFailure.code} — ${lastFailure.message}`);
+    return finish('not_solved', '', 'v2', log, started, lastFailure);
+  } catch (err: any) {
+    const failure =
+      err instanceof RecaptchaError
+        ? err
+        : new RecaptchaError('timeout', err?.toString?.() ?? String(err));
+    if (failure.code === 'widget_missing') {
+      logActivity({
+        tool: 'playwright_captcha_recaptcha',
+        tab: page.url(),
+        status: 'error',
+        detail: failure.message.slice(0, 200),
+      });
+      throw failure;
+    }
+    log.push(`stopped: ${failure.code} — ${failure.message}`);
+    return finish('not_solved', '', 'v2', log, started, failure);
+  }
+}
+
+/** Registers playwright_captcha_recaptcha. */
+export default function captchaRecaptcha(server: FastMCP): void {
+  server.addTool({
+    name: 'playwright_captcha_recaptcha',
+    description:
+      'Solve a Google reCAPTCHA v2 (checkbox, then image grid or audio) and capture v3 tokens. Clicks the checkbox with real pointer moves; on an image grid it classifies the tiles with a configured vision endpoint (APPIUM_MCP_CAPTCHA_VLM_URL, or the claude-local hunch config), presses the matching tiles, verifies, and re-solves each new round until a token appears. Without a vision endpoint it returns a PNG plus every tile box as `needs_answer`; `tiles`/`tilesScript` override it. Retries a rejected grid up to 5 times in 90 s and maps "challenge expired", "Try again later" and anchor alerts to typed failures. Audio is captured and handed to an external transcription hook. v3 is always reported "unverified — no score assertion". Live demo: https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php; v3 demo: https://recaptcha-demo.appspot.com/recaptcha-v3-verify.php.',
+    parameters: recaptchaSchema,
+    annotations: { readOnlyHint: false, openWorldHint: false },
+    execute: solveRecaptcha,
   });
 }
 
