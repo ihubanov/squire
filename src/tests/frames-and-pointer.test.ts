@@ -174,6 +174,49 @@ const CLOBBER_DIAL = THUMB_DIAL.replace(
   });`
   );
 
+/**
+ * A straight range-style track. It is not a disc: the value is read from the
+ * pointer's x along the line, so an arc drag leaves the control and the value
+ * stops updating. The track sits below #dial, so the offsets the angleScript
+ * returns have to be measured from the dial box, not the track's own origin.
+ */
+const TRACK_DIAL = `
+<style>
+  body { margin: 0 }
+  #dial { position:absolute; left:200px; top:200px; width:300px; height:300px;
+          border-radius:50%; border:2px solid #333 }
+  #track { position:absolute; left:200px; top:520px; width:300px; height:30px;
+           background:#ddd }
+</style>
+<div id="dial"></div><div id="track"></div>
+<script>
+ (function () {
+  const track = document.getElementById('track');
+  const INSET = 12;
+  const valueAt = (x) => {
+    const b = track.getBoundingClientRect();
+    const f = Math.max(0, Math.min(1, (x - b.left - INSET) / (b.width - INSET * 2)));
+    return Math.round(f * 360);
+  };
+  let dragging = false;
+  track.addEventListener('mousedown', (e) => {
+    dragging = true;
+    window.__value = valueAt(e.clientX);
+    window.__downAt = { x: e.clientX, y: e.clientY };
+    e.preventDefault();
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (dragging) window.__value = valueAt(e.clientX);
+  });
+  document.addEventListener('mouseup', () => {
+    if (dragging) {
+      dragging = false;
+      window.__result = { value: window.__value, downAt: window.__downAt };
+    }
+  });
+ })();
+</script>`;
+
 let browser: Browser;
 let driver: InstanceType<typeof PlaywrightDriver>;
 let page: Page;
@@ -436,6 +479,41 @@ describe('playwright_captcha_solve', () => {
       Math.hypot(out.downAt.x - thumb.x, out.downAt.y - thumb.y)
     ).toBeLessThan(3);
     expect(Math.abs(out.angle - 150)).toBeLessThan(5);
+  }, 30_000);
+
+  test('a range track is dragged straight in value units, not as an arc', async () => {
+    await load(TRACK_DIAL);
+    // Offsets are px from the dial box, exactly the contract angle.js emits.
+    const geo = await page.evaluate(() => {
+      const d = document.getElementById('dial')!.getBoundingClientRect();
+      const t = document.getElementById('track')!.getBoundingClientRect();
+      return {
+        y: t.top + t.height / 2 - d.top,
+        x1: t.left + 12 - d.left,
+        x2: t.left + t.width - 12 - d.left,
+        centreX: t.left + t.width / 2,
+      };
+    });
+    const res = await execs.playwright_captcha_solve({
+      dial: '#dial',
+      // startAngle is the live control value (180, the thumb at the centre),
+      // so the press lands on the thumb rather than snapping to the track end.
+      angleScript: `(() => ({
+        angle: 270, startAngle: 180, min: 0, max: 360,
+        track: { x1: ${geo.x1}, y1: ${geo.y}, x2: ${geo.x2}, y2: ${geo.y} },
+      }))()`,
+      successScript:
+        '(() => { const r = window.__result; return !!r && Math.abs(r.value - 270) <= 4; })()',
+      settleMs: 100,
+      maxAttempts: 1,
+    });
+    const text = res.content[0].text as string;
+    expect(text).toMatch(/^Solved in \d+s/);
+
+    const out = await page.evaluate(() => (window as any).__result);
+    expect(Math.abs(out.value - 270)).toBeLessThanOrEqual(4);
+    // Pressed at the thumb (the centre of the 0–360 track), not at x1.
+    expect(Math.abs(out.downAt.x - geo.centreX)).toBeLessThan(3);
   }, 30_000);
 
   test('the clobber fixture really clobbers', () => {

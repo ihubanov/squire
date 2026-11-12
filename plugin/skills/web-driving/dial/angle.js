@@ -1,7 +1,9 @@
 // angleScript for a rotate-the-disc captcha ("unroll the rim") — the rotation
 // dial / radial slider type, drawn here over a horizontal <input type=range>
-// track. Returns { angle, startAngle, radius,
-// grab, confidence } in playwright_drag_arc convention.
+// track. Returns { angle, startAngle, min, max, track, confidence }: a
+// straight track drag (not an arc) with px offsets from the dial box's
+// top-left. Pass dial: '#source' — the offsets are measured from #source's
+// box, and the tool adds the dial box back.
 //
 // The fit: both pictures are sampled as a wide RGB annulus around the disc
 // centre (radii well inside the rim, so wall lines and floor patterns carry
@@ -188,28 +190,30 @@ async () => {
   const peakTerm = Math.max(0, Math.min(1, (midPeak - 0.3) / 0.25));
   const confidence = Math.max(0, Math.min(1, spreadTerm * peakTerm));
 
-  // Straight track, arc press: the pointer travels an arc of the target's
-  // radius and the input reads x alone, so give exact endpoint bearings.
+  // A range input is a straight track, not a disc: an arc leaves the control
+  // and the value stops updating. Give the tool the travel line in px from the
+  // dial box (#source), inset by the measured usable track margin (12 px for
+  // the live 300 px control) so both extremes are reachable. The press starts
+  // at the live value, which is the thumb (180 = the box centre); the tool's
+  // line drag then runs in value units, not bearings.
   const b = track.getBoundingClientRect();
-  const cx = b.width / 2,
-    cy = b.height / 2;
-  const THUMB = 26,
-    travel = Math.max(1, b.width - THUMB),
-    off = THUMB / 2;
-  const xAt = (v) => off + travel * (Math.max(0, Math.min(360, v)) / 360);
+  const d = src.getBoundingClientRect();
+  const INSET = 12;
+  const y = b.top + b.height / 2 - d.top;
+  const min = Number(track.min);
+  const max = Number(track.max);
   const cur = Number(track.value) || 0;
-  const x0 = xAt(cur),
-    x1 = xAt(fine);
-  const radius = Math.max(20, Math.abs(x1 - cx), Math.abs(x0 - cx)) || 20;
-  const bearing = (x) => {
-    const k = Math.max(-1, Math.min(1, (x - cx) / radius));
-    return (Math.acos(k) * 180) / Math.PI; // same side for both endpoints
-  };
   return {
-    angle: bearing(x1),
-    startAngle: bearing(x0),
-    radius,
-    grab: { x: x0, y: cy },
+    angle: fine,
+    startAngle: cur,
+    min: Number.isFinite(min) ? min : 0,
+    max: Number.isFinite(max) ? max : 360,
+    track: {
+      x1: b.left + INSET - d.left,
+      y1: y,
+      x2: b.left + b.width - INSET - d.left,
+      y2: y,
+    },
     confidence,
     confidenceNote: `spread ${spread.toFixed(1)}° peak ${worstPeak.toFixed(3)} decoy ${decoy.toFixed(3)}`,
   };
