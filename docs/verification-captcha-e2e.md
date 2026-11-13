@@ -227,7 +227,10 @@ detected before `create_session` returns and triggers one engine switch.
 
 Real capture vendored as `src/tests/fixtures/datadome-hard-block.html`
 (21,343 bytes, exact marker, Bulgarian "Блокирани сте" template, reached via
-`https://www.olx.bg/myaccount/` → `auth.olx.bg` login redirect).
+`https://www.olx.bg/myaccount/` → `auth.olx.bg` login redirect). It is one of
+12 captures from the run; their sizes spread 21,340–21,348 bytes, so the page
+varies slightly per attempt. The test asserts the marker, never the byte
+length — an exact-length assertion would be brittle.
 
 A/B on one blocked egress (213.91.182.204), headed, fresh profile per attempt,
 5 rounds alternated:
@@ -243,4 +246,8 @@ is expected **not** to clear it from the same IP; the typed
 egress or warm a profile. patchright 1.64.3 also does not ship a distinct
 patched binary: it is a stock Chrome for Testing build (`chromium-1254`,
 158.0.8127.18) and the difference is entirely in patchright-core, so docs must
-not pin a browser build. Raw per-attempt data: `/tmp/h2h/results.json`.
+not pin a browser build. Raw per-attempt data is vendored alongside the capture
+as `src/tests/fixtures/datadome-h2h-results-2026-11-13.json` (the 10 attempts,
+5 per engine, all `HARD-BLOCK`) and `datadome-h2h-run5-2026-11-13.log` (same
+10 attempts as JSONL plus the `{"pw":5,"pr":5}` summary line). `sha256sum` both
+if you paper an argument on them.

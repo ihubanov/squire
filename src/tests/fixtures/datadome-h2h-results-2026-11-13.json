@@ -1,0 +1,212 @@
+[
+  {
+    "arm": "pw",
+    "round": 0,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SBDdVp4cFJnYUdFQ0swRjJJam83WXpxLTQ1bHVwZDhQcqFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIFh6UTNBR01VMVZOT3VUM3hDek5SVFl6RmlUY0xQTlowo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": true,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMA4rSN2VsJYroA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=4fgZc8tXZzqGmKP5W5elnq4mDDbd1ARO5LBVCvGFUo9o531SM7eSlKdnJRWwui~nKW9C9EF8pv6AbewUU48ra6zJHh~t_FKOBMYmQBW8LszN8nwU8IF9~s~v4hsy43DE&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 19406
+  },
+  {
+    "arm": "pr",
+    "round": 0,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SBueG5nNHhGUTlIWWh4dU9Ra2dRQTlfR19Rck5xNGE0VKFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIDN4QndKN0hsT3dKcUNzaGljUVNVWUlXajJaSzhBeU5qo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": false,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMA64FTwRImRGkA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=1EgYCrVX77CsQvHpv1sD0lM1HjSTPkpD85p0IzAS_Qq_bjdP_40vp4KH55kU0QCLWAGEmkWja1OQX13GqZYe3K8xyrsOLsQz~SVypwoGS7QGRM95MLdNG53QEgUYxM8g&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 15813
+  },
+  {
+    "arm": "pr",
+    "round": 1,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SB5WDZMajlSVDViX3h0dlFqalJoNW9Hbi1jT2VicFk2V6Fur3VuaXZlcnNhbC1sb2dpbqN0aWTZIFU1V2pTaTZRMkxFVURVdGpBbXJHZG1aQmF4dGhIb2Nzo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": false,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMA5CxFciSL81oA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=eFC5JzXNN0rMhk~P5CPNy2defFa7oCJePtbQL1hvJTpfH0C2im~GKEPxpgQq29Q5UdOIRVqIKY_JPiUKBPAZu16wQQAtPF2dr77HyPKxcKfLIJ0ohL_npJZCqzz77aDG&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 13616
+  },
+  {
+    "arm": "pw",
+    "round": 1,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SBYallFcGtvTFlOT1RUcE53dDFqOV9DY0trYVE5VW56a6Fur3VuaXZlcnNhbC1sb2dpbqN0aWTZIDNYWTkxT25nc0JwZVM4eHlUbmRYSUstbmptX180dkVMo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": true,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMAHonS0_noDJUA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=Ftid1xEx3gv8_PnpJrYHQ9qyvRkp0L_5LvWquTd5d2n2IRHhB2plnVQgFMhxkrjOySkeaoQPSTU01elut5WhfuVxZSbzow1t5wGBUpo13hy1FIBGkQBtheQFyqFrH1NQ&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 13000
+  },
+  {
+    "arm": "pw",
+    "round": 2,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SA5SVlvbWtiblhQaUpzQzFGRGZ3MXNIMmEwLVFvVU1MMaFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIEJNTG0zUHNmRVZOTFYtYWNyMVZsSmNMSWNud1hHWEc3o2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": true,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMA-GlhEjBTFJEA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=kHaoZBAZeP1pgWqjFNkad79DbftCpvVlJKf9XNxyOiCHU6BTUxe32_JbXTjMJ5TMjgb9W0CnVwJpLJNCFdi9xr0otxGArufpGXQ_rUlANeRkvFeoY_Ek5Sx9cZRsoO6I&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 13237
+  },
+  {
+    "arm": "pr",
+    "round": 2,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SBZT2h4TjJ0UmIyRmZDYkxtTHgwZV9YbnVKOXVBWlZ3WKFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIEVjdEcxbnE1YTBuSGM5c1dLZC1fbmNYSnJ0ZTlIRVJDo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": false,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMAeUqvZ6C5eCUA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=RHXgbNQc5_S4dnMGU70kBBQNtOO4HhYRoNHVcplUplJXHsMI6eBKBZEDlr_j8_PEjtoNm~NhyJo9GdOmcpUJqalpQL0566cTa04mcHhIn7zgj40mebarVRtJoVWukSn0&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 12946
+  },
+  {
+    "arm": "pr",
+    "round": 3,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SBBNHNLVTRrVmp4Uy1oY0FTQWlZelJwSHNRclBnMjI2NaFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIFRZODF3ejBxNS0tM1pNZGEyM01mLVB6R20wNXpfa1cto2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": false,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMAFyJgDafVRA8A1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=eXUtw5pl3fQyhYwhe7uWUBdQVy5rwlam2VCfAzAsIXB6kj1xrKe2CDFbHlqSVKi5T8HgudvBixDtNkvE4EliYIsC~96RJLx_J0AxWTF3omiaJ7N9BYD7sZVHdzrisj36&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 14336
+  },
+  {
+    "arm": "pw",
+    "round": 3,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SB4QWdvYktwWThRakllNXdTSzI3WmJPanhMbzNET1N2UaFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIEFid01helNPeEx4TWFiVGxkckw1cXdCVzZ0aDJSREdTo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": true,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMACPU68CCdMWoA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=L_7j9ylpy9QDUOe4C~d7vWsR3nV5Gp2YZmSUzZwPCqy1~G8AfZUA3YA6H7tTZOGwDvZ4RqQ1N~9qvNsdRXVHQYqC30ymd~y0ShExgX6wcBNHH5JA02CpX3lUW2d246gD&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 12745
+  },
+  {
+    "arm": "pw",
+    "round": 4,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SByUmtqYmY2MnRjZ2Z1V0pLbHRzVXZaWF9NVDZjSXBzeKFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIFZhQkw4S18zUXdqb2poV2VXZFVOWjJpN2hwU1U4aEp0o2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": true,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMAvrgutjaAPDEA1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=L8eNbpT1z63Tbr~uGCFgdUwZMg7p8_Tue1oGqqFbuUNVoUrGMZKUpKc1QyaxsH0fSvuQ8K3rE_P3UwwwSaaS2_GNDgXcd~vFS2xhIoF9gUeMnS2TFaIgGWQWFdeYz0Ej&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 12966
+  },
+  {
+    "arm": "pr",
+    "round": 4,
+    "ok": true,
+    "finalUrl": "https://auth.olx.bg/u/login/identifier?state=hKFo2SBoaHM1dHllTkZzeU9uVTAydXBaV3hwV09CY1ZBbkVaeqFur3VuaXZlcnNhbC1sb2dpbqN0aWTZIDJuWksyaDhheWRiQWZGdG83VTg0N3d5Z050dF81Zndpo2NpZNkgaFdrcVh1blZVR1ZQOU43eUw",
+    "title": "olx.bg",
+    "navErr": null,
+    "webdriver": false,
+    "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/158.0.0.0 Safari/537.36",
+    "ddCookie": true,
+    "frames": [
+      {
+        "kind": "hard-block",
+        "url": "https://geo.captcha-delivery.com/captcha/?initialCid=AHrlqAAAAAMAZp5sPNhUmt8A1Vu2zA%3D%3D&hash=34A04C06C32B6D6E22CE8A29F6B192&cid=lAYAO2wIu4qxIZQT8t3oHjY54GlcvEgnoh6KT6u~4Gdw_NThPr8nD9jlev4w_~s1k3Dx4Jsws~_PQLq94ZGd0Cw2iEGbu1ixSjAuVhy8q514tJrUYwy0HVt2jWds0s6i&t=bv&referer=https%3A%2F%2Fauth.olx.bg%2F"
+      }
+    ],
+    "bodySnippet": "",
+    "hasLoginUI": false,
+    "verdict": "HARD-BLOCK",
+    "ms": 12807
+  }
+]
