@@ -216,3 +216,31 @@ turning the flag on by default.
 Tests: `src/tests/captcha-hunch.test.ts` (config, request shape, gate,
 partial failure, missing binary, concurrency via a fake judge executable) and
 the hunch case in `src/tests/captcha-recaptcha.test.ts`.
+
+### DataDome hard-block is not a puzzle (2026-11-13)
+
+`geo.captcha-delivery.com` serves three different things and only one is a
+CAPTCHA: a hard block (`body[data-dd-response-page="hard-block"]`, no challenge
+at all), an `/interstitial/` that auto-clears, and a rendered challenge
+(`captcha__…`). `src/datadome-detect.ts` separates them; a hard block is now
+detected before `create_session` returns and triggers one engine switch.
+
+Real capture vendored as `src/tests/fixtures/datadome-hard-block.html`
+(21,343 bytes, exact marker, Bulgarian "Блокирани сте" template, reached via
+`https://www.olx.bg/myaccount/` → `auth.olx.bg` login redirect).
+
+A/B on one blocked egress (213.91.182.204), headed, fresh profile per attempt,
+5 rounds alternated:
+
+| Engine               | Result                                   |
+| -------------------- | ---------------------------------------- |
+| Playwright 1.65.0    | 5/5 hard-block, `navigator.webdriver` true  |
+| patchright 1.64.3    | 5/5 hard-block, `navigator.webdriver` false |
+
+Same UA both. The block is IP/ASN reputation, so the one-shot patchright retry
+is expected **not** to clear it from the same IP; the typed
+`datadome_hard_block` error is the normal terminal path and says to change
+egress or warm a profile. patchright 1.64.3 also does not ship a distinct
+patched binary: it is a stock Chrome for Testing build (`chromium-1254`,
+158.0.8127.18) and the difference is entirely in patchright-core, so docs must
+not pin a browser build. Raw per-attempt data: `/tmp/h2h/results.json`.
