@@ -1,6 +1,7 @@
 /**
  * Captcha solve loop for one captcha type: the rotation dial (a.k.a.
- * rotate-the-disc / radial slider). Behind APPIUM_MCP_CAPTCHA.
+ * rotate-the-disc / radial slider). Registered by default
+ * (APPIUM_MCP_CAPTCHA=0 removes it).
  *
  * Written against the captcha *type*, not one site: everything is selector-
  * and script-driven, so the same tool serves any widget of this kind.
@@ -12,7 +13,7 @@
  * re-show or refresh the widget, and stop when the page says it passed.
  * Everything is by selector and script, so nothing here is specific to a site.
  */
-import type { ContentResult, FastMCP } from 'fastmcp';
+import type { ContentResult, Context, FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import { getDriver, isPlaywrightDriverSession } from '../../session-store.js';
 import { assertNotProtected } from '../../protected-urls.js';
@@ -21,6 +22,7 @@ import { logActivity } from '../../activity-log.js';
 import { arcDrag, lineDrag } from './pointer.js';
 import { cueText } from '../../watch.js';
 import { recaptchaSchema, solveRecaptcha } from './captcha-recaptcha.js';
+import { makeSamplingSampler } from './captcha-sampling.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -169,10 +171,13 @@ export default function captcha(server: FastMCP): void {
   server.addTool({
     name: 'playwright_captcha_solve',
     description:
-      'Solve a captcha in the active web page. With `provider: "auto"` (default) it dispatches: a Google reCAPTCHA widget (v2 checkbox / image grid / audio, or v3 token) is solved by the reCAPTCHA solver; otherwise it solves a rotation-dial (rotate-the-disc / radial slider) captcha by dragging it round. Dial path: repeats reading the next angle from angleScript, dragging the knob there with real pointer moves, screenshotting the widget and scoring it with judgeScript (and/or checking successScript), re-showing and refreshing, then stopping when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. For reCAPTCHA the image grid is classified by the configured vision endpoint (APPIUM_MCP_CAPTCHA_VLM_URL, or the claude-local hunch config) and re-solved each round. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
+      'Solve a captcha in the active web page. With `provider: "auto"` (default) it dispatches: a Google reCAPTCHA widget (v2 checkbox / image grid / audio, or v3 token) is solved by the reCAPTCHA solver; otherwise it solves a rotation-dial (rotate-the-disc / radial slider) captcha by dragging it round. Dial path: repeats reading the next angle from angleScript, dragging the knob there with real pointer moves, screenshotting the widget and scoring it with judgeScript (and/or checking successScript), re-showing and refreshing, then stopping when it passes. Each press is absolute (live start angle to target in one drag), so nothing has to accumulate between presses; a fit the script rates low can buy a new picture with minAngleConfidence instead of a hopeless drag. For reCAPTCHA the image grid is classified by the configured vision endpoint (APPIUM_MCP_CAPTCHA_VLM_URL, or the claude-local hunch config) or, when none is configured, by the MCP client model through sampling, and re-solved each round. Selector- and script-driven, so it is not tied to any site. Use playwright_frames first to find the widget frame, and playwright_evaluate for one-off probes.',
     parameters: schema,
     annotations: { readOnlyHint: false, openWorldHint: false },
-    execute: async (args: z.infer<typeof schema>): Promise<ContentResult> => {
+    execute: async (
+      args: z.infer<typeof schema>,
+      ctx?: Context<any>
+    ): Promise<ContentResult> => {
       const driver = getDriver();
       if (!driver || !isPlaywrightDriverSession(driver)) {
         throw new Error(
@@ -205,8 +210,11 @@ export default function captcha(server: FastMCP): void {
               .catch(() => false)
           );
         if (isRecaptcha) {
+          const log: string[] = [];
           return solveRecaptcha(
-            args as unknown as z.infer<typeof recaptchaSchema>
+            args as unknown as z.infer<typeof recaptchaSchema>,
+            makeSamplingSampler(server, ctx, (m) => log.push(`  ${m}`)),
+            log
           );
         }
       }

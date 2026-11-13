@@ -1,6 +1,6 @@
 ---
 name: captcha-dial
-description: Solve a rotation-dial captcha from its live pixels with a portable, dependency-free browser-side scorer, then apply the angle and submit. Use when a page shows a dial/rotation challenge (a picture cut by a circular mask, a slider or draggable disc) and you need the correct angle rather than a hand-supplied guess. Ships a measured thin-ring profile plus a generic profile for other rotation widgets. Prefer this over playwright_captcha_solve when you want the solver itself (no APPIUM_MCP_CAPTCHA flag needed).
+description: Solve a rotation-dial captcha from its live pixels with a portable, dependency-free browser-side scorer, then apply the angle and submit. Use when a page shows a dial/rotation challenge (a picture cut by a circular mask, a slider or draggable disc) and you need the correct angle rather than a hand-supplied guess. Ships a measured thin-ring profile plus a generic profile for other rotation widgets. Prefer this over playwright_captcha_solve when you want the solver itself (the MCP captcha tools are registered by default since 1.34.8).
 ---
 
 # Rotation-dial captcha solver
@@ -76,8 +76,8 @@ The MCP tool and this skill are complementary, not alternatives. The tool owns
 the real pointer drag, refresh and settle handling; `SquireDial.compute()`
 supplies the angle. Three measured constraints (2026-11-08):
 
-- The tool is registered only when the server starts with
-  `APPIUM_MCP_CAPTCHA=1`.
+- The tool is registered by default since 1.34.8 (`APPIUM_MCP_CAPTCHA=0`
+  removes it); servers before that needed `APPIUM_MCP_CAPTCHA=1`.
 - **Servers older than 1.34.0 require a `handle` element and read the start
   angle from it, so they cannot drive a control that has no knob element
   (a range input).** The geometry contract — `angleScript` may return

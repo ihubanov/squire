@@ -1,5 +1,6 @@
 /**
- * Cloudflare Turnstile solver. Behind APPIUM_MCP_CAPTCHA.
+ * Cloudflare Turnstile solver. Registered by default (APPIUM_MCP_CAPTCHA=0
+ * removes it).
  *
  * Two surfaces are discriminated before anything is pressed: an embedded
  * Turnstile widget (a host `.cf-turnstile` / `[data-sitekey]` element, or the

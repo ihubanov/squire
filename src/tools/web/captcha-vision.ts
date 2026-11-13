@@ -16,10 +16,15 @@
  * URL is taken from it: hunch's main model is the text judge, and a model that
  * cannot see images answers tiles confidently wrong. Set APPIUM_MCP_CAPTCHA_VLM_MODEL
  * to the backend's vision model when it is not the default.
+ *
+ * With neither a URL nor a hunch config, the caller may pass `sample` — an
+ * MCP-sampling classifier answered by the client's own main model
+ * (captcha-sampling.ts). The local endpoint always wins when configured.
  */
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { TileSampler } from './captcha-sampling.js';
 
 const HUNCH_TOML = join(homedir(), '.local/share/claude-local/hunch.toml');
 
@@ -29,6 +34,9 @@ export interface VisionConfig {
   model: string;
   key?: string;
 }
+
+/** Optional sink for why a vision attempt failed, for the caller's log. */
+export type VisionNote = (message: string) => void;
 
 interface HunchConfig {
   url?: string;
@@ -154,66 +162,218 @@ export function parseSelection(text: string): number[] | null {
   return Array.from(new Set(out));
 }
 
+/** Where one classification request goes: a local endpoint or MCP sampling. */
+type ClassifierSource = {
+  config?: VisionConfig | null;
+  /** Used when no local endpoint is configured. */
+  sample?: TileSampler;
+};
+
+/**
+ * Asks for one reply, over the local endpoint when configured and through
+ * MCP sampling otherwise. Null means "no answer", never "nothing selected".
+ */
+async function askModel(
+  source: ClassifierSource,
+  instruction: string,
+  image: string,
+  maxTokens: number,
+  timeoutMs: number,
+  note?: VisionNote
+): Promise<string | null> {
+  if (source.sample) {
+    return source.sample({ instruction, image, maxTokens });
+  }
+  if (!source.config) {
+    return null;
+  }
+  const content: Array<Record<string, unknown>> = [
+    { type: 'text', text: instruction },
+    { type: 'image_url', image_url: { url: image } },
+  ];
+  const body = {
+    model: source.config.model,
+    messages: [{ role: 'user', content }],
+    temperature: 0,
+    // A reasoning VL model thinks its way around every tile before it
+    // answers. A 4x4 grid has measured 1.5k-4k reasoning tokens, and at
+    // 4096 a long grid was seen to finish right at the cap with the reply
+    // cut off mid-JSON ("no usable answer" live). 8192 leaves room to
+    // finish; the per-tile fallback covers an endpoint that still runs out.
+    max_tokens: maxTokens,
+  };
+  let res: Response;
+  try {
+    res = await fetch(`${source.config.url}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(source.config.key
+          ? { Authorization: `Bearer ${source.config.key}` }
+          : {}),
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch (err: any) {
+    note?.(`vision request failed: ${err?.message ?? err}`);
+    return null;
+  }
+  if (!res.ok) {
+    note?.(`vision endpoint returned HTTP ${res.status}`);
+    return null;
+  }
+  let data: {
+    choices?: Array<{
+      message?: { content?: string | null; reasoning?: string | null };
+      finish_reason?: string;
+    }>;
+  };
+  try {
+    data = (await res.json()) as typeof data;
+  } catch {
+    note?.('vision endpoint returned non-JSON');
+    return null;
+  }
+  const choice = data.choices?.[0];
+  const message = choice?.message;
+  // A reasoning VL model can spend the whole budget thinking and leave
+  // `content` null with the analysis in `reasoning`; its final JSON is
+  // still there, so read it rather than blame the endpoint.
+  const reply = message?.content || message?.reasoning;
+  if (typeof reply !== 'string' || !reply.trim()) {
+    note?.('vision endpoint returned an empty reply');
+    return null;
+  }
+  if (!parseSelection(reply)) {
+    note?.(
+      `vision reply had no JSON selection (finish ${choice?.finish_reason ?? '?'})`
+    );
+  }
+  return reply;
+}
+
 /**
  * Classifies every tile in one request. Returns the selected indices, or
  * null when the endpoint is unusable — callers treat null as "no answer",
  * never as "nothing selected".
  */
 export async function pickTiles(opts: {
-  config: VisionConfig;
+  config?: VisionConfig | null;
+  sample?: TileSampler;
   prompt: string;
-  /** The whole challenge grid, header included. */
+  /** The tile grid alone (no instruction header). */
   image: string;
   rows: number;
   cols: number;
   timeoutMs?: number;
+  note?: VisionNote;
 }): Promise<number[] | null> {
-  const instruction = INSTRUCTION.replaceAll(
-    'ROWS',
-    String(opts.rows)
-  ).replaceAll('COLS', String(opts.cols));
-  const content: Array<Record<string, unknown>> = [
-    {
-      type: 'text',
-      text: `${instruction}\n\nChallenge instruction: ${JSON.stringify(opts.prompt)}`,
-    },
-    { type: 'image_url', image_url: { url: opts.image } },
-  ];
-  const body = {
-    model: opts.config.model,
-    messages: [{ role: 'user', content }],
-    temperature: 0,
-    // A reasoning VL model spends 900-1300 tokens working through a 4x4 grid
-    // before it answers; at 2048 a long grid is truncated mid-thought and the
-    // reply carries no JSON. The headroom is what makes the answer reliable.
-    max_tokens: 4096,
-  };
-  const res = await fetch(`${opts.config.url}/chat/completions`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(opts.config.key
-        ? { Authorization: `Bearer ${opts.config.key}` }
-        : {}),
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 45_000),
-  });
-  if (!res.ok) {
+  const instruction =
+    INSTRUCTION.replaceAll('ROWS', String(opts.rows)).replaceAll(
+      'COLS',
+      String(opts.cols)
+    ) + `\n\nChallenge instruction: ${JSON.stringify(opts.prompt)}`;
+  const reply = await askModel(
+    { config: opts.config, sample: opts.sample },
+    instruction,
+    opts.image,
+    8192,
+    opts.timeoutMs ?? 45_000,
+    opts.note
+  );
+  return reply ? parseSelection(reply) : null;
+}
+
+const PER_TILE_INSTRUCTION = [
+  'This is ONE tile cropped from a reCAPTCHA image challenge grid.',
+  'The whole-grid instruction is quoted at the end.',
+  'Decide whether this single tile clearly contains any part of the',
+  'requested object, including a cut-off fragment at its edge — that is how',
+  'reCAPTCHA expects fragments to be treated. Say true only for a real',
+  'object or a piece of one, not for a reflection, shadow, or background',
+  'glimpse.',
+  '',
+  'Answer with JSON only, no prose: {"yes":true} or {"yes":false}',
+].join('\n');
+
+/** Pulls a strict yes/no verdict out of a model reply. */
+export function parseYes(text: string): boolean | null {
+  const m = /"yes"\s*:\s*(true|false)/i.exec(text);
+  if (m) {
+    return m[1].toLowerCase() === 'true';
+  }
+  const trimmed = text.trim();
+  const bare = /^(true|false|yes|no)\b/i.exec(trimmed);
+  if (bare) {
+    const v = bare[1].toLowerCase();
+    return v === 'true' || v === 'yes';
+  }
+  return null;
+}
+
+/**
+ * Fallback for a grid the whole-image classifier could not read: asks about
+ * each tile crop on its own, in parallel, and returns the indices that got a
+ * clear "yes". Null when no request produced a usable verdict at all.
+ */
+export async function pickTilesPerTile(opts: {
+  config?: VisionConfig | null;
+  sample?: TileSampler;
+  prompt: string;
+  /** Tile crops, each tagged with the caller's tile index. */
+  tiles: Array<{ index: number; image: string }>;
+  timeoutMs?: number;
+  concurrency?: number;
+  note?: VisionNote;
+}): Promise<number[] | null> {
+  if (!opts.tiles.length) {
     return null;
   }
-  const data = (await res.json()) as {
-    choices?: Array<{
-      message?: { content?: string | null; reasoning?: string | null };
-    }>;
+  const instruction = `${PER_TILE_INSTRUCTION}\n\nWhole-grid instruction: ${JSON.stringify(opts.prompt)}`;
+  const source = { config: opts.config, sample: opts.sample };
+  const askOne = async (image: string): Promise<boolean | null> => {
+    const reply = await askModel(
+      source,
+      instruction,
+      image,
+      1024,
+      opts.timeoutMs ?? 20_000
+    );
+    return reply ? parseYes(reply) : null;
   };
-  const message = data.choices?.[0]?.message;
-  // A reasoning VL model can spend the whole budget thinking and leave
-  // `content` null with the analysis in `reasoning`; its final JSON is
-  // still there, so read it rather than blame the endpoint.
-  const reply = message?.content || message?.reasoning;
-  if (typeof reply !== 'string' || !reply.trim()) {
+  // MCP sampling is one request per call and some clients gate it behind a
+  // human approval; asking all tiles at once is still right, but keep the
+  // fan-out modest so a queued client is not flooded.
+  const concurrency = opts.sample ? 1 : (opts.concurrency ?? 4);
+
+  const verdicts: Array<boolean | null> = new Array(opts.tiles.length).fill(
+    null
+  );
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(concurrency, opts.tiles.length) },
+    async () => {
+      for (let i = next++; i < opts.tiles.length; i = next++) {
+        verdicts[i] = await askOne(opts.tiles[i].image);
+      }
+    }
+  );
+  await Promise.all(workers);
+
+  const failed = verdicts.filter((v) => v === null).length;
+  if (failed) {
+    opts.note?.(`per-tile: ${failed}/${verdicts.length} tiles unanswered`);
+  }
+  if (failed === verdicts.length && verdicts.length > 0) {
     return null;
   }
-  return parseSelection(reply);
+  const picked = verdicts
+    .map((v, i) => (v === true ? opts.tiles[i].index : -1))
+    .filter((i) => i >= 0);
+  if (!picked.length && failed) {
+    // Some tiles failed and none were positive: "nothing" would be a guess.
+    return null;
+  }
+  return picked;
 }

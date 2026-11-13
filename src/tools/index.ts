@@ -284,9 +284,9 @@ export default function registerTools(server: FastMCP): void {
   selectOption(server);
   hover(server);
   pointer(server);
-  // Captcha help is off unless asked: the loop is young, and a tool that is
-  // not there cannot be picked by mistake.
-  if (process.env.APPIUM_MCP_CAPTCHA === '1') {
+  // Captcha help is on by default (Jack and other clients cannot be relied on
+  // to set env); APPIUM_MCP_CAPTCHA=0 removes it.
+  if (process.env.APPIUM_MCP_CAPTCHA !== '0') {
     captcha(server);
     captchaTurnstile(server);
     captchaRecaptcha(server);

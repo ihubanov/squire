@@ -58,9 +58,16 @@ const ANCHOR = `
 
 const js = (s: string) => JSON.stringify(s).replace(/<\//g, '<\\/');
 
+// Real widgets are 3x3 (and escalate to 4x4); the fixture is laid out the
+// same way so tile geometry and the crop-to-tiles image match Google's.
 const TILES = Array.from(
-  { length: 9 },
-  (_, i) => `<td class="rc-imageselect-tile" data-i="${i}"></td>`
+  { length: 3 },
+  (_, r) =>
+    `<tr>${Array.from(
+      { length: 3 },
+      (_, c) =>
+        `<td class="rc-imageselect-tile" data-i="${r * 3 + c}"></td>`
+    ).join('')}</tr>`
 ).join('');
 
 const GRID = `
@@ -73,7 +80,7 @@ const GRID = `
 <div class="rc-imageselect">
   <div class="rc-imageselect-desc">Select all images with a bus</div>
   <table class="rc-imageselect-table"><tbody>
-    <tr>${TILES}</tr>
+    ${TILES}
   </tbody></table>
 </div>
 <button id="recaptcha-reload-button">reload</button>
@@ -315,11 +322,64 @@ describe('playwright_captcha_recaptcha', () => {
         'Challenge instruction: "Select all images with a bus"'
       );
       expect(bodies[0].messages[0].content[1].type).toBe('image_url');
+      // A reasoning model needs room to finish a long grid's JSON.
+      expect(bodies[0].max_tokens).toBe(8192);
       const selected = await page.evaluate(
         () => (window as any).__selected as number[]
       );
       expect(selected.sort((a, b) => a - b)).toEqual([1, 4]);
       expect(text).toContain('vision selected 1,4');
+    } finally {
+      spy.mockRestore();
+      process.env.APPIUM_MCP_CAPTCHA_VLM = '0';
+      delete process.env.APPIUM_MCP_CAPTCHA_VLM_URL;
+    }
+  }, 30_000);
+
+  test('an unusable whole-grid answer falls back to per-tile crops', async () => {
+    process.env.APPIUM_MCP_CAPTCHA_VLM = '1';
+    process.env.APPIUM_MCP_CAPTCHA_VLM_URL = 'http://vision.test/v1';
+    const bodies: any[] = [];
+    const spy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (_url: unknown, init?: any) => {
+        bodies.push(JSON.parse(String(init?.body)));
+        // First call is the whole grid and carries no JSON (the live 4x4
+        // failure mode); every per-tile call then answers yes.
+        const reply = bodies.length === 1 ? 'I cannot tell.' : '{"yes":true}';
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: reply } }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+    try {
+      await load(
+        HOST(
+          `window.__scenario.check = () => openChallenge(${js(GRID)});
+           window.__scenario.verify = () => setTimeout(() => setToken('tok-per-tile'), 100);`
+        )
+      );
+      const res = await execs.playwright_captcha_recaptcha({
+        verifyMs: 3000,
+        maxAttempts: 1,
+      });
+      const text = res.content[0].text as string;
+      expect(text).toMatch(/^Captcha recaptcha v2: pass/);
+      expect(text).toContain('vision gave no usable answer — asking tile by tile');
+      expect(bodies).toHaveLength(1 + 9);
+      expect(bodies[1].messages[0].content[0].text).toContain(
+        'This is ONE tile cropped'
+      );
+      expect(bodies[1].messages[0].content[0].text).toContain(
+        'Whole-grid instruction: "Select all images with a bus"'
+      );
+      expect(text).toContain('per-tile vision selected 0,1,2,3,4,5,6,7,8');
+      const selected = await page.evaluate(
+        () => (window as any).__selected as number[]
+      );
+      expect(selected.sort((a, b) => a - b)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8,
+      ]);
     } finally {
       spy.mockRestore();
       process.env.APPIUM_MCP_CAPTCHA_VLM = '0';

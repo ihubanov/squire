@@ -15,8 +15,9 @@ Merge commit: `ba24d6818162bc244017fe80447812886da3a092`
   — b8b4001's file verbatim. `git diff feat/captcha-recaptcha -- src/tools/web/captcha-recaptcha.ts`
   is empty.
 - No Playwright type fixes were needed: `npx tsc --noEmit` exits 0 with zero output.
-- `src/tools/index.ts` registers both `captchaTurnstile` and `captchaRecaptcha` under the
-  existing `APPIUM_MCP_CAPTCHA === '1'` gate (index.ts:289-293).
+- `src/tools/index.ts` registers both `captchaTurnstile` and `captchaRecaptcha` (and the
+  dial solver). Since 1.34.8 they are on by default; `APPIUM_MCP_CAPTCHA=0` removes them.
+  When this run was made they still sat behind the opt-in `APPIUM_MCP_CAPTCHA === '1'` gate.
 
 ## Offline gates
 
@@ -114,12 +115,42 @@ on 3×3 rounds (all five selections rejected); `live5-headed` is the only run th
 Treat the grid as experimental until a larger pass-rate sample exists; the checkbox and v3
 paths are the stable ones. Audio transcription remains unverified.
 
-Follow-up (2026-11-13, not yet live-verified): the capture now crops the image to the tile
-grid instead of the whole panel (the instruction header is passed as text and was skewing
-row/column reading), the whole-grid budget is 8192 tokens (a 4×4 was measured finishing at
-3941/4096 with the JSON cut off), and an unusable whole-grid answer falls back to
-classifying each tile crop separately (~1.3 s/tile, four in parallel). A fresh live pass-rate
-run is still needed before this can be called an improvement.
+### 4×4 fix, live-verified (2026-11-13)
+
+The capture now crops the image to the tile grid instead of the whole panel (the
+instruction header is passed as text and was skewing row/column reading), the whole-grid
+budget is 8192 tokens (a 4×4 was measured finishing at 3941/4096 with the JSON cut off), and
+an unusable whole-grid answer falls back to classifying each tile crop separately
+(~1.3 s/tile, four in parallel).
+
+Same harness and demo, headed, three consecutive runs on a fresh build:
+
+| Run | Result |
+|---|---|
+| `live6-headed` | **PASS** — 3×3, first selection `0,3,7` accepted, 8.9 s, token 2297. Server echo: `success => 1`, empty `errorCodes`. |
+| `live7-headed` | **PASS** — 3×3, first selection `0,3,8` accepted, 7.8 s, token 2254. Server echo: success, empty `errorCodes`. |
+| `live8-headed` | **PASS** — **4×4**, first selection `8,9` accepted, 9.1 s, token 2297. Server echo: success, empty `errorCodes`. |
+
+3/3 at ~8–9 s, versus 2/5 at 49–71 s before. The 4×4 whole-grid path is the one that
+previously returned no answer; it now answers on the first round. The per-tile fallback is
+covered by unit tests only — none of these three runs needed it.
+
+### MCP-sampling classifier, live-verified (2026-11-13)
+
+The zero-config path (no `APPIUM_MCP_CAPTCHA_VLM_URL`, no hunch config) was exercised over
+stdio by a client that advertises `sampling` and forwards `sampling/createMessage` to the same
+VL gateway. Server ran with `HOME` pointed at an empty dir so only sampling could classify.
+Same demo page, headless:
+
+| Run | Result |
+|---|---|
+| `sampling-live1` | **FAIL** — 10 sampling round-trips reached the client, but the first driver reply omitted the schema-required `role: "assistant"`, so every reply was rejected and the tool correctly reported `needs_answer` (22 s). A client bug, not a solver bug — but worth noting the rejection is silent in the tool log. |
+| `sampling-live2` | **PASS** — 4 grid rounds (rejected 3 times, accepted `[4]` on round 4), 2276-char token in the host field, 49.1 s. 4 sampling calls, whole-grid only, ~1.7-2.2 s each. |
+| `sampling-live3` | **PASS** — same shape, accepted `[2]` on round 4, 2297-char token, 44.9 s. Run on the rebuilt 1.34.8; sampling failures now also surface in the run log (`sampling: …`) instead of a silent `needs_answer`. |
+
+The sampling reply contract matters: a result without `role: "assistant"` is schema-invalid
+and the SDK drops it. With the field present the grid path behaves the same as the local
+endpoint. Harness: `/tmp/e2e/sampling-recaptcha.mjs`.
 
 ## SAGE
 
@@ -131,7 +162,8 @@ run is still needed before this can be called an improvement.
 
 Fixture files and driver scripts are in `/tmp/e2e` (`client.mjs` takes
 `<url> <tool> <maxCalls> <toolArgsJson> <frameHint>`; `E2E_SERVER=/media/data/fun-noSync/tools/.sq-wt-verify/dist/index.js
-APPIUM_MCP_CAPTCHA=1`). Fixture server: `python3 -m http.server 8899 --bind 127.0.0.1` in `/tmp/e2e`.
+APPIUM_MCP_CAPTCHA=1` — note the tools are on by default since 1.34.8, so the variable is
+only needed to reproduce on an older build). Fixture server: `python3 -m http.server 8899 --bind 127.0.0.1` in `/tmp/e2e`.
 
 Raw runs: `/tmp/e2e/turnstile-matrix.txt`, `/tmp/e2e/recaptcha-v3.txt`,
 `/tmp/e2e/run-recaptcha-v2b.txt`, `/tmp/jest-full.log`, `/tmp/jest-full2.log`,

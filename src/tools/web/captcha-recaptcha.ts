@@ -1,7 +1,7 @@
 /**
  * Google reCAPTCHA solver: v2 checkbox + image/audio challenge, and v3 token
- * capture. Behind APPIUM_MCP_CAPTCHA; also reachable through
- * playwright_captcha_solve with provider="recaptcha".
+ * capture. Registered by default (APPIUM_MCP_CAPTCHA=0 removes it); also
+ * reachable through playwright_captcha_solve with provider="recaptcha".
  *
  * On an image grid the tool classes the tiles with the configured vision
  * endpoint (see captcha-vision.ts), presses the matching ones, verifies, and
@@ -32,7 +32,9 @@ import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
 import { cueText } from '../../watch.js';
-import { pickTiles, visionConfig } from './captcha-vision.js';
+import { pickTiles, pickTilesPerTile, visionConfig } from './captcha-vision.js';
+import type { TileSampler } from './captcha-sampling.js';
+import { makeSamplingSampler } from './captcha-sampling.js';
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -92,6 +94,8 @@ interface GridCapture {
   image: string;
   imageBox: Box;
   tiles: Tile[];
+  /** Page scroll when the capture was taken, for follow-up tile crops. */
+  scroll: { x: number; y: number };
 }
 
 interface AudioCapture {
@@ -124,6 +128,15 @@ const READ_TOKEN = `(() => {
   const el = document.querySelector(${JSON.stringify(TOKEN_SELECTOR)});
   return el && 'value' in el ? String(el.value || '').trim() : '';
 })()`;
+
+/** Smallest box containing all of them. */
+function unionBox(boxes: Box[]): Box {
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  const right = Math.max(...boxes.map((b) => b.x + b.width));
+  const bottom = Math.max(...boxes.map((b) => b.y + b.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
 
 /** Centre of a box, nudged off dead-centre the way a human lands. */
 function pressPoint(box: Box): { x: number; y: number } {
@@ -338,7 +351,7 @@ export const recaptchaSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Solve image grids with the configured vision endpoint instead of returning them as `needs_answer` (default: on when APPIUM_MCP_CAPTCHA_VLM_URL or a claude-local hunch config is present). A caller-supplied `tiles`/`tilesScript` still wins.'
+      'Solve image grids with the configured vision endpoint (or MCP sampling when no endpoint is configured) instead of returning them as `needs_answer`. Default: on when APPIUM_MCP_CAPTCHA_VLM_URL, a claude-local hunch config, or a sampling-capable MCP client is present; this option set to false disables both. A caller-supplied `tiles`/`tilesScript` still wins.'
     ),
   visionMs: z
     .number()
@@ -354,7 +367,15 @@ export const recaptchaSchema = z.object({
  * in playwright_captcha_solve.
  */
 export async function solveRecaptcha(
-  args: z.infer<typeof recaptchaSchema>
+  args: z.infer<typeof recaptchaSchema>,
+  /** Answers tile grids through the client's model when no local endpoint is set. */
+  sampler?: TileSampler,
+  /**
+   * Receives the run log. The caller passes the same array it gave the
+   * sampler's failure note, so a rejected sampling reply shows up in the
+   * tool output instead of only "no usable answer".
+   */
+  log: string[] = []
 ): Promise<ContentResult> {
   const driver = getDriver();
   if (!driver || !isPlaywrightDriverSession(driver)) {
@@ -372,8 +393,10 @@ export async function solveRecaptcha(
   const maxMs = args.maxMs ?? 90_000;
   const verifyMs = args.verifyMs ?? 8000;
   const vision = args.vision === false ? null : visionConfig();
+  // The local endpoint wins; sampling is the zero-config fallback.
+  const sample = args.vision === false || vision ? undefined : sampler;
+  const hasVision = Boolean(vision || sample);
   const started = Date.now();
-  const log: string[] = [];
   let lastFailure: RecaptchaError | undefined;
   let anchor: Frame | null = null;
 
@@ -473,20 +496,13 @@ export async function solveRecaptcha(
   const capture = async (frame: Frame): Promise<Challenge | null> => {
     if (await present(frame, GRID_PANEL, 4000)) {
       const tileSelector = await chooseSelector(frame);
-      const imageBox = await boxOf(frame, GRID_PANEL);
+      const panelBox = await boxOf(frame, GRID_PANEL);
       const prompt = cleanPrompt(await readPrompt(frame));
       const scroll = (await mainEval(() => ({
         x: window.scrollX,
         y: window.scrollY,
       }))) as { x: number; y: number };
-      const clip = {
-        x: Math.max(0, Math.floor(imageBox.x + scroll.x)),
-        y: Math.max(0, Math.floor(imageBox.y + scroll.y)),
-        width: Math.max(1, Math.ceil(imageBox.width)),
-        height: Math.max(1, Math.ceil(imageBox.height)),
-      };
-      const png = await page.screenshot({ clip, type: 'png' });
-      const tiles: Tile[] = [];
+      const boxes: Array<Box & { index: number }> = [];
       const handles = frame.locator(tileSelector);
       const n = await handles.count();
       for (let i = 0; i < n; i++) {
@@ -495,13 +511,25 @@ export async function solveRecaptcha(
         if (!b) {
           continue;
         }
-        tiles.push({
-          index: i,
-          ...b,
-          imageX: b.x - imageBox.x,
-          imageY: b.y - imageBox.y,
-        });
+        boxes.push({ index: i, ...b });
       }
+      // Crop to the tiles, not the whole panel: the panel carries Google's
+      // instruction header, which the prompt already states and which
+      // misleads the model about where the grid starts. A tile union also
+      // keeps a 4x4 image at the true row/column geometry.
+      const imageBox = boxes.length ? unionBox(boxes) : panelBox;
+      const clip = {
+        x: Math.max(0, Math.floor(imageBox.x + scroll.x)),
+        y: Math.max(0, Math.floor(imageBox.y + scroll.y)),
+        width: Math.max(1, Math.ceil(imageBox.width)),
+        height: Math.max(1, Math.ceil(imageBox.height)),
+      };
+      const png = await page.screenshot({ clip, type: 'png' });
+      const tiles: Tile[] = boxes.map((b) => ({
+        ...b,
+        imageX: b.x - imageBox.x,
+        imageY: b.y - imageBox.y,
+      }));
       return {
         type: 'grid',
         frame,
@@ -509,6 +537,7 @@ export async function solveRecaptcha(
         image: `data:image/png;base64,${png.toString('base64')}`,
         imageBox,
         tiles,
+        scroll,
       };
     }
     if (await present(frame, '.rc-audiochallenge', 1000)) {
@@ -769,24 +798,29 @@ export async function solveRecaptcha(
       // Grid: the caller's answer wins; otherwise ask the vision
       // endpoint; otherwise hand the capture back.
       let answerTiles = args.tiles;
-      if (!answerTiles && !args.tilesScript && vision) {
-        const cols =
-          new Set(
-            challenge.tiles
-              .filter((t) => t.imageY === challenge.tiles[0].imageY)
-              .map((t) => t.imageX)
-          ).size || 3;
-        const rows = Math.ceil(challenge.tiles.length / cols);
+      if (!answerTiles && !args.tilesScript && hasVision) {
+        const first = challenge.tiles[0];
+        const cols = first
+          ? new Set(
+              challenge.tiles
+                .filter((t) => t.imageY === first.imageY)
+                .map((t) => t.imageX)
+            ).size || 3
+          : 3;
+        const rows = Math.ceil(challenge.tiles.length / cols) || 3;
         log.push(
-          `  asking vision (${vision.model}) about a ${rows}x${cols} grid`
+          `  asking vision (${vision?.model ?? 'MCP sampling'}) about a ${rows}x${cols} grid`
         );
+        const note = (m: string) => log.push(`  ${m}`);
         const picked = await pickTiles({
           config: vision,
+          sample,
           prompt: challenge.prompt,
           image: challenge.image,
           rows,
           cols,
           timeoutMs: args.visionMs,
+          note,
         }).catch((err: any) => {
           log.push(`  vision call failed: ${err?.message ?? err}`);
           return null;
@@ -799,7 +833,49 @@ export async function solveRecaptcha(
             `  vision selected ${answerTiles.length ? answerTiles.join(',') : 'none'}`
           );
         } else {
-          log.push('  vision gave no usable answer');
+          // The whole-grid read failed (typically a 4x4 that ran the model
+          // out of budget mid-reasoning). Ask about each tile crop instead;
+          // small images get short, reliable answers.
+          log.push('  vision gave no usable answer — asking tile by tile');
+          const crops: Array<{ index: number; image: string }> = [];
+          for (const tile of challenge.tiles) {
+            const png = await page
+              .screenshot({
+                clip: {
+                  x: Math.max(0, Math.floor(tile.x + challenge.scroll.x)),
+                  y: Math.max(0, Math.floor(tile.y + challenge.scroll.y)),
+                  width: Math.max(1, Math.ceil(tile.width)),
+                  height: Math.max(1, Math.ceil(tile.height)),
+                },
+                type: 'png',
+              })
+              .catch(() => null);
+            if (png) {
+              crops.push({
+                index: tile.index,
+                image: `data:image/png;base64,${png.toString('base64')}`,
+              });
+            }
+          }
+          const perTile = await pickTilesPerTile({
+            config: vision,
+            sample,
+            prompt: challenge.prompt,
+            tiles: crops,
+            timeoutMs: Math.min(args.visionMs ?? 15_000, 15_000),
+            note,
+          }).catch((err: any) => {
+            log.push(`  per-tile vision call failed: ${err?.message ?? err}`);
+            return null;
+          });
+          if (perTile) {
+            answerTiles = perTile;
+            log.push(
+              `  per-tile vision selected ${perTile.length ? perTile.join(',') : 'none'}`
+            );
+          } else {
+            log.push('  per-tile vision gave no usable answer');
+          }
         }
       }
       if (!answerTiles && !args.tilesScript) {
@@ -814,9 +890,9 @@ export async function solveRecaptcha(
           },
           failure: {
             code: 'needs_answer',
-            message: vision
+            message: hasVision
               ? 'vision returned no usable tile selection — pass `tiles` (or tilesScript), or retry'
-              : 'grid captured — pass `tiles` (or tilesScript) with the matching indices, or configure a vision endpoint',
+              : 'grid captured — pass `tiles` (or tilesScript) with the matching indices, or configure a vision endpoint / enable MCP sampling in the client',
           },
         });
       }
@@ -903,10 +979,17 @@ export default function captchaRecaptcha(server: FastMCP): void {
   server.addTool({
     name: 'playwright_captcha_recaptcha',
     description:
-      'Solve a Google reCAPTCHA v2 (checkbox, then image grid or audio) and capture v3 tokens. Clicks the checkbox with real pointer moves; on an image grid it classifies the tiles with a configured vision endpoint (APPIUM_MCP_CAPTCHA_VLM_URL, or the claude-local hunch config), presses the matching tiles, verifies, and re-solves each new round until a token appears. Without a vision endpoint it returns a PNG plus every tile box as `needs_answer`; `tiles`/`tilesScript` override it. Retries a rejected grid up to 5 times in 90 s and maps "challenge expired", "Try again later" and anchor alerts to typed failures. Audio is captured and handed to an external transcription hook. v3 is always reported "unverified — no score assertion". Live demo: https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php; v3 demo: https://recaptcha-demo.appspot.com/recaptcha-v3-verify.php.',
+      'Solve a Google reCAPTCHA v2 (checkbox, then image grid or audio) and capture v3 tokens. Clicks the checkbox with real pointer moves; on an image grid it classifies the tiles with a configured vision endpoint (APPIUM_MCP_CAPTCHA_VLM_URL, or the claude-local hunch config), or — when no endpoint is configured — by asking the MCP client model through sampling, then presses the matching tiles, verifies, and re-solves each new round until a token appears. Without either source it returns a PNG plus every tile box as `needs_answer`; `tiles`/`tilesScript` override it. Retries a rejected grid up to 5 times in 90 s and maps "challenge expired", "Try again later" and anchor alerts to typed failures. Audio is captured and handed to an external transcription hook. v3 is always reported "unverified — no score assertion". Live demo: https://recaptcha-demo.appspot.com/recaptcha-v2-checkbox.php; v3 demo: https://recaptcha-demo.appspot.com/recaptcha-v3-verify.php.',
     parameters: recaptchaSchema,
     annotations: { readOnlyHint: false, openWorldHint: false },
-    execute: solveRecaptcha,
+    execute: (args, ctx) => {
+      const log: string[] = [];
+      return solveRecaptcha(
+        args,
+        makeSamplingSampler(server, ctx, (m) => log.push(`  ${m}`)),
+        log
+      );
+    },
   });
 }
 
