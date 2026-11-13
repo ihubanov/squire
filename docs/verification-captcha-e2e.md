@@ -16,7 +16,7 @@ Merge commit: `ba24d6818162bc244017fe80447812886da3a092`
   is empty.
 - No Playwright type fixes were needed: `npx tsc --noEmit` exits 0 with zero output.
 - `src/tools/index.ts` registers both `captchaTurnstile` and `captchaRecaptcha` (and the
-  dial solver). Since 1.34.8 they are on by default; `APPIUM_MCP_CAPTCHA=0` removes them.
+  dial solver). Since 1.34.9 they are on by default; `APPIUM_MCP_CAPTCHA=0` removes them.
   When this run was made they still sat behind the opt-in `APPIUM_MCP_CAPTCHA === '1'` gate.
 
 ## Offline gates
@@ -146,7 +146,7 @@ Same demo page, headless:
 |---|---|
 | `sampling-live1` | **FAIL** — 10 sampling round-trips reached the client, but the first driver reply omitted the schema-required `role: "assistant"`, so every reply was rejected and the tool correctly reported `needs_answer` (22 s). A client bug, not a solver bug — but worth noting the rejection is silent in the tool log. |
 | `sampling-live2` | **PASS** — 4 grid rounds (rejected 3 times, accepted `[4]` on round 4), 2276-char token in the host field, 49.1 s. 4 sampling calls, whole-grid only, ~1.7-2.2 s each. |
-| `sampling-live3` | **PASS** — same shape, accepted `[2]` on round 4, 2297-char token, 44.9 s. Run on the rebuilt 1.34.8; sampling failures now also surface in the run log (`sampling: …`) instead of a silent `needs_answer`. |
+| `sampling-live3` | **PASS** — same shape, accepted `[2]` on round 4, 2297-char token, 44.9 s. Run on the rebuilt 1.34.9; sampling failures now also surface in the run log (`sampling: …`) instead of a silent `needs_answer`. |
 
 The sampling reply contract matters: a result without `role: "assistant"` is schema-invalid
 and the SDK drops it. With the field present the grid path behaves the same as the local
@@ -162,7 +162,7 @@ endpoint. Harness: `/tmp/e2e/sampling-recaptcha.mjs`.
 
 Fixture files and driver scripts are in `/tmp/e2e` (`client.mjs` takes
 `<url> <tool> <maxCalls> <toolArgsJson> <frameHint>`; `E2E_SERVER=/media/data/fun-noSync/tools/.sq-wt-verify/dist/index.js
-APPIUM_MCP_CAPTCHA=1` — note the tools are on by default since 1.34.8, so the variable is
+APPIUM_MCP_CAPTCHA=1` — note the tools are on by default since 1.34.9, so the variable is
 only needed to reproduce on an older build). Fixture server: `python3 -m http.server 8899 --bind 127.0.0.1` in `/tmp/e2e`.
 
 Raw runs: `/tmp/e2e/turnstile-matrix.txt`, `/tmp/e2e/recaptcha-v3.txt`,
