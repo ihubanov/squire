@@ -65,8 +65,7 @@ const TILES = Array.from(
   (_, r) =>
     `<tr>${Array.from(
       { length: 3 },
-      (_, c) =>
-        `<td class="rc-imageselect-tile" data-i="${r * 3 + c}"></td>`
+      (_, c) => `<td class="rc-imageselect-tile" data-i="${r * 3 + c}"></td>`
     ).join('')}</tr>`
 ).join('');
 
@@ -365,7 +364,9 @@ describe('playwright_captcha_recaptcha', () => {
       });
       const text = res.content[0].text as string;
       expect(text).toMatch(/^Captcha recaptcha v2: pass/);
-      expect(text).toContain('vision gave no usable answer — asking tile by tile');
+      expect(text).toContain(
+        'vision gave no usable answer — asking tile by tile'
+      );
       expect(bodies).toHaveLength(1 + 9);
       expect(bodies[1].messages[0].content[0].text).toContain(
         'This is ONE tile cropped'
