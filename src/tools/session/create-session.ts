@@ -341,6 +341,32 @@ async function createDriverSession(
   return Array.isArray(result) ? result[0] : result;
 }
 
+/**
+ * Installed distro/snap Chromium binaries, in preference order. This is not
+ * Google Chrome (`channel: 'chrome'` covers that); it is the fallback when
+ * Chrome is missing but the distro build is present. Unlike Playwright's
+ * bundled build — "Chrome for Testing", which announces in the window that
+ * it is only for automated testing — a distro Chromium does not.
+ */
+const SYSTEM_CHROMIUM_PATHS = [
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
+  '/snap/bin/chromium',
+  '/usr/lib/chromium/chromium',
+];
+
+async function findSystemChromium(): Promise<string | undefined> {
+  for (const p of SYSTEM_CHROMIUM_PATHS) {
+    try {
+      await access(p, constants.X_OK);
+      return p;
+    } catch {
+      // Not there or not executable; try the next.
+    }
+  }
+  return undefined;
+}
+
 /** Long enough for a person to find Chrome's Allow prompt and click it. */
 const CDP_CONNECT_TIMEOUT_MS = 90_000;
 /** Playwright's setup over the already-open connection. */
@@ -682,15 +708,37 @@ export async function openWebSession(opts: WebSessionOptions) {
         if (!stealth) {
           throw e;
         }
-        log.warn(
-          `Could not launch installed Google Chrome (channel chrome) (${(e as Error).message}); falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome, or pass channel: 'chrome' to make this an error instead.`
-        );
-        context = await engine.launchPersistentContext(
-          userDataDir,
-          persistentOpts
-        );
-        browser = context.browser() as import('playwright').Browser;
-        launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
+        const systemChromium = await findSystemChromium();
+        let launched = false;
+        if (systemChromium) {
+          try {
+            context = await engine.launchPersistentContext(userDataDir, {
+              ...persistentOpts,
+              executablePath: systemChromium,
+            });
+            browser = context.browser() as import('playwright').Browser;
+            launchedBinary = `system Chromium ${systemChromium}`;
+            launched = !!browser;
+            log.warn(
+              `Could not launch installed Google Chrome (channel chrome) (${(e as Error).message}); using system Chromium at ${systemChromium} instead — not Chrome for Testing.`
+            );
+          } catch (systemError) {
+            log.warn(
+              `System Chromium at ${systemChromium} also failed (${(systemError as Error).message}); falling back to bundled Chromium.`
+            );
+          }
+        }
+        if (!launched) {
+          log.warn(
+            "Falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome or a distro Chromium, or pass channel: 'chrome' to make a missing Chrome an error instead."
+          );
+          context = await engine.launchPersistentContext(
+            userDataDir,
+            persistentOpts
+          );
+          browser = context.browser() as import('playwright').Browser;
+          launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
+        }
       }
       if (!browser) {
         throw new Error(
@@ -735,11 +783,32 @@ export async function openWebSession(opts: WebSessionOptions) {
         if (!stealth) {
           throw e;
         }
-        log.warn(
-          `Could not launch installed Google Chrome (channel chrome) (${(e as Error).message}); falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome, or pass channel: 'chrome' to make this an error instead.`
-        );
-        browser = await chromium.launch(launchOpts);
-        launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
+        const systemChromium = await findSystemChromium();
+        let launched = false;
+        if (systemChromium) {
+          try {
+            browser = await chromium.launch({
+              ...launchOpts,
+              executablePath: systemChromium,
+            });
+            launchedBinary = `system Chromium ${systemChromium}`;
+            launched = true;
+            log.warn(
+              `Could not launch installed Google Chrome (channel chrome) (${(e as Error).message}); using system Chromium at ${systemChromium} instead — not Chrome for Testing.`
+            );
+          } catch (systemError) {
+            log.warn(
+              `System Chromium at ${systemChromium} also failed (${(systemError as Error).message}); falling back to bundled Chromium.`
+            );
+          }
+        }
+        if (!launched) {
+          log.warn(
+            "Falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome or a distro Chromium, or pass channel: 'chrome' to make a missing Chrome an error instead."
+          );
+          browser = await chromium.launch(launchOpts);
+          launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
+        }
       }
     } else {
       browser = await engine.launch({

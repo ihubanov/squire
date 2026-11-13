@@ -7,7 +7,7 @@ description: Drive a web page through the Squire Playwright tools the right way 
 
 The Squire web tools drive a **real** browser (real JS, cookies, redirects, captchas). Prefer `playwright_run_script` for any flow that is more than one action; fall back to the single-action tools only for genuinely one-off interactions.
 
-**Which browser runs (Chromium sessions).** The default tries the installed Google Chrome stable (`channel: 'chrome'`) and falls back to Playwright's bundled Chromium. The bundled build is **Chrome for Testing**, which announces "only for automated testing" in the window and lowers trust with sites like Google. When that matters, pass `channel: 'chrome'` to `create_session`: it then requires real Chrome and fails clearly if it is missing instead of falling back. `executablePath` pins an exact binary; `channel` and `executablePath` also work with `userDataDir`. The session reply names the binary that actually launched.
+**Which browser runs (Chromium sessions).** The default tries the installed Google Chrome stable (`channel: 'chrome'`), then an installed distro/snap Chromium (`/usr/bin/chromium`, `/snap/bin/chromium`, …), then Playwright's bundled Chromium. The bundled build is **Chrome for Testing**, which announces "only for automated testing" in the window and lowers trust with sites like Google; distro Chromium does not. When that matters, pass `channel: 'chrome'` to `create_session`: it then requires real Chrome and fails clearly if it is missing instead of falling back. `executablePath` pins an exact binary; `channel` and `executablePath` also work with `userDataDir`. The session reply names the binary that actually launched.
 
 ## Pick the right tool
 
