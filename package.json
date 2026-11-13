@@ -125,5 +125,8 @@
   ],
   "overrides": {
     "@opentelemetry/exporter-trace-otlp-http": "~0.300.0"
+  },
+  "optionalDependencies": {
+    "patchright": "^1.64.3"
   }
 }

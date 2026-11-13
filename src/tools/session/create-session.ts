@@ -24,6 +24,7 @@ import { PlaywrightDriver } from '../../playwright-adapter.js';
 import { markSharedWithUser } from '../../focus-guard.js';
 import { findFreePort } from '../../free-port.js';
 import { ownedBrowserEnv } from '../../browser-cleanup.js';
+import { detectDatadome, findHardBlock } from '../../datadome-detect.js';
 import {
   resolveCdpEndpoint,
   normalizeCdpEndpoint,
@@ -115,6 +116,16 @@ export interface WebSessionOptions {
    * When set, that exact binary must exist — there is no fallback.
    */
   executablePath?: string;
+  /**
+   * Internal: this launch is the one-shot DataDome hard-block retry, so do
+   * not retry again.
+   */
+  datadomeRetried?: boolean;
+  /**
+   * Internal: an engine retry must launch a fresh owned browser, never
+   * re-attempt a CDP attach to the browser that was just refused.
+   */
+  skipCdpAttach?: boolean;
 }
 
 // Define capabilities type
@@ -342,6 +353,46 @@ async function createDriverSession(
 }
 
 /**
+ * Load patchright (a Playwright fork whose patchright-core avoids the
+ * automation-detectable CDP calls stock Playwright makes; the binary it drives
+ * is an ordinary Chrome for Testing build) as an optional engine. The import
+ * is deliberately not a literal so the build does not require the optional
+ * package; a missing install becomes an actionable error, not a boot failure.
+ */
+async function loadPatchright(): Promise<{
+  chromium: typeof import('playwright').chromium;
+}> {
+  const spec = 'patchright';
+  try {
+    return (await import(spec)) as {
+      chromium: typeof import('playwright').chromium;
+    };
+  } catch (e) {
+    throw new Error(
+      `patchright_unavailable: the patchright engine is not installed (${(e as Error).message}). Install it once: npm install patchright && npx patchright install chromium.`
+    );
+  }
+}
+
+/**
+ * patchright downloads its own Chromium build per machine (not via npm).
+ * A launch failure for that missing binary must say exactly how to fix it.
+ */
+function mapPatchrightLaunchError(e: unknown): never {
+  const msg = (e as Error)?.message ?? String(e);
+  if (
+    /ms-playwright|Executable doesn't exist|executable doesn't exist|please run the following command|not installed/i.test(
+      msg
+    )
+  ) {
+    throw new Error(
+      `patchright_browser_missing: patchright's Chromium build is not installed (${msg}). Run once: npx patchright install chromium.`
+    );
+  }
+  throw e instanceof Error ? e : new Error(String(e));
+}
+
+/**
  * Installed distro/snap Chromium binaries, in preference order. This is not
  * Google Chrome (`channel: 'chrome'` covers that); it is the fallback when
  * Chrome is missing but the distro build is present. Unlike Playwright's
@@ -374,21 +425,32 @@ const CDP_SETUP_TIMEOUT_MS = 60_000;
 
 /** Open a Playwright browser and make it the active session. */
 export async function openWebSession(opts: WebSessionOptions) {
-  const browserType = opts.browser || 'chromium';
+  const requestedBrowser = opts.browser || 'chromium';
+  // patchright is a Playwright-compatible engine that avoids the
+  // automation-detectable CDP calls stock Playwright makes. Always chromium.
+  const engineName: 'playwright' | 'patchright' =
+    requestedBrowser === 'patchright' ? 'patchright' : 'playwright';
+  const browserType =
+    requestedBrowser === 'patchright' ? 'chromium' : requestedBrowser;
   const headless = opts.headless !== false; // default true
   const initialUrl = opts.url;
   const viewport = opts.viewport || { width: 1920, height: 1080 };
 
   log.info(
-    `Creating new WEB session with Playwright (${browserType}, headless=${headless})`
+    `Creating new WEB session with ${engineName} (${browserType}, headless=${headless})`
   );
 
-  const { chromium, firefox, webkit } = await import('playwright');
-  const engines = { chromium, firefox, webkit };
-  const engine = engines[browserType as keyof typeof engines];
+  const engines: Record<string, import('playwright').BrowserType> =
+    engineName === 'patchright'
+      ? { chromium: (await loadPatchright()).chromium }
+      : ((await import('playwright')) as unknown as Record<
+          string,
+          import('playwright').BrowserType
+        >);
+  const engine = engines[browserType];
   if (!engine) {
     throw new Error(
-      `Unsupported browser: ${browserType}. Use chromium, firefox, or webkit.`
+      `Unsupported browser: ${requestedBrowser}. Use chromium, firefox, webkit, or patchright.`
     );
   }
 
@@ -415,7 +477,7 @@ export async function openWebSession(opts: WebSessionOptions) {
   const cdpRequired =
     !!explicitEndpoint ||
     /^(1|true|yes)$/i.test((process.env.APPIUM_MCP_CDP_REQUIRED ?? '').trim());
-  if (cdpRequired && !cdpEndpoint) {
+  if (!opts.skipCdpAttach && cdpRequired && !cdpEndpoint) {
     throw new Error(
       'APPIUM_MCP_CDP_REQUIRED is set but APPIUM_MCP_CDP_ENDPOINT is not — refusing to launch a detached browser.'
     );
@@ -443,7 +505,7 @@ export async function openWebSession(opts: WebSessionOptions) {
   // The attached Chrome's WebSocket URL: its key in cdp-connection.ts.
   let upstreamUrl: string | undefined;
 
-  if (cdpEndpoint && browserType === 'chromium') {
+  if (!opts.skipCdpAttach && cdpEndpoint && browserType === 'chromium') {
     log.info(`Attaching to existing Chromium via CDP at ${cdpEndpoint}`);
     let wsOrHttp = cdpEndpoint;
     try {
@@ -463,7 +525,7 @@ export async function openWebSession(opts: WebSessionOptions) {
       let b: import('playwright').Browser;
       try {
         ({ browser: b } = await getUserBrowser(relay.url, (ep) =>
-          chromium.connectOverCDP(ep, { timeout: CDP_SETUP_TIMEOUT_MS })
+          engine.connectOverCDP(ep, { timeout: CDP_SETUP_TIMEOUT_MS })
         ));
       } catch (e) {
         throw new Error(
@@ -595,6 +657,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     // APPIUM_MCP_CDP_PORT sets the preferred port (default 9222);
     // set it to 0 or "none" to not expose CDP at all.
     const isChromium = browserType === 'chromium';
+    const isPatchright = engineName === 'patchright';
     const cdpPortEnv = (process.env.APPIUM_MCP_CDP_PORT ?? '').trim();
     if (
       isChromium &&
@@ -634,6 +697,11 @@ export async function openWebSession(opts: WebSessionOptions) {
     if (explicitBinary && !isChromium) {
       throw new Error(
         `channel/executablePath select a Chromium-family binary; not supported for ${browserType}. Use browser: 'chromium'.`
+      );
+    }
+    if (isPatchright && explicitBinary) {
+      throw new Error(
+        'patchright uses its own Chromium build; channel/executablePath are not supported with it. Drop them or use browser: "chromium".'
       );
     }
     const binaryLaunchOpts = executablePath
@@ -685,21 +753,28 @@ export async function openWebSession(opts: WebSessionOptions) {
       try {
         context = await engine.launchPersistentContext(userDataDir, {
           ...persistentOpts,
+          // patchright must use its own Chromium build: no installed-Chrome
+          // channel and no distro fallback.
           ...(explicitBinary
             ? binaryLaunchOpts
-            : stealth
+            : stealth && !isPatchright
               ? { channel: 'chrome' }
               : {}),
         });
         browser = context.browser() as import('playwright').Browser;
-        launchedBinary = explicitBinary
-          ? executablePath
-            ? `custom executable ${executablePath}`
-            : `channel ${channel}`
-          : stealth
-            ? 'Google Chrome stable (channel chrome)'
-            : undefined;
+        launchedBinary = isPatchright
+          ? 'patchright (own Chromium build)'
+          : explicitBinary
+            ? executablePath
+              ? `custom executable ${executablePath}`
+              : `channel ${channel}`
+            : stealth
+              ? 'Google Chrome stable (channel chrome)'
+              : undefined;
       } catch (e) {
+        if (isPatchright) {
+          mapPatchrightLaunchError(e);
+        }
         if (explicitBinary) {
           throw new Error(
             `Could not launch the requested browser (${executablePath ?? `channel ${channel}`}): ${(e as Error).message}`
@@ -745,7 +820,7 @@ export async function openWebSession(opts: WebSessionOptions) {
           `Persistent profile ${userDataDir} opened without a browser handle — close any other browser using it and retry.`
         );
       }
-    } else if (stealth || explicitBinary) {
+    } else if (stealth || explicitBinary || isPatchright) {
       const launchOpts = {
         headless,
         env: ownedBrowserEnv(),
@@ -764,17 +839,27 @@ export async function openWebSession(opts: WebSessionOptions) {
       };
       try {
         // Explicit selection wins; otherwise the installed Google Chrome
-        // binary — least detectable.
-        browser = await chromium.launch({
+        // binary — least detectable. patchright always uses its own patched
+        // Chromium, so launch through the selected engine, not Playwright's.
+        browser = await engine.launch({
           ...launchOpts,
-          ...(explicitBinary ? binaryLaunchOpts : { channel: 'chrome' }),
+          ...(explicitBinary
+            ? binaryLaunchOpts
+            : isPatchright
+              ? {}
+              : { channel: 'chrome' }),
         });
-        launchedBinary = explicitBinary
-          ? executablePath
-            ? `custom executable ${executablePath}`
-            : `channel ${channel}`
-          : 'Google Chrome stable (channel chrome)';
+        launchedBinary = isPatchright
+          ? 'patchright (own Chromium build)'
+          : explicitBinary
+            ? executablePath
+              ? `custom executable ${executablePath}`
+              : `channel ${channel}`
+            : 'Google Chrome stable (channel chrome)';
       } catch (e) {
+        if (isPatchright) {
+          mapPatchrightLaunchError(e);
+        }
         if (explicitBinary) {
           throw new Error(
             `Could not launch the requested browser (${executablePath ?? `channel ${channel}`}): ${(e as Error).message}`
@@ -787,7 +872,7 @@ export async function openWebSession(opts: WebSessionOptions) {
         let launched = false;
         if (systemChromium) {
           try {
-            browser = await chromium.launch({
+            browser = await engine.launch({
               ...launchOpts,
               executablePath: systemChromium,
             });
@@ -806,7 +891,7 @@ export async function openWebSession(opts: WebSessionOptions) {
           log.warn(
             "Falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome or a distro Chromium, or pass channel: 'chrome' to make a missing Chrome an error instead."
           );
-          browser = await chromium.launch(launchOpts);
+          browser = await engine.launch(launchOpts);
           launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
         }
       }
@@ -879,6 +964,48 @@ export async function openWebSession(opts: WebSessionOptions) {
       }
       throw e;
     }
+
+    // DataDome hard-block: the page is refused on IP/ASN reputation before
+    // any challenge exists, so no selector will ever appear. Fingerprint
+    // changes cannot fix the IP, but one engine switch is the only remedy
+    // available in-process. Try patchright once, on the same profile, then
+    // say plainly what the block is instead of letting the caller wait.
+    if (browserType === 'chromium') {
+      const block = findHardBlock(await detectDatadome(page).catch(() => []));
+      if (block) {
+        await (attachedToUserBrowser ? page.close() : browser.close()).catch(
+          () => {}
+        );
+        if (upstreamUrl) {
+          releaseUserBrowser(upstreamUrl);
+        }
+        const retryAllowed =
+          engineName === 'playwright' &&
+          !opts.datadomeRetried &&
+          !attachedToUserBrowser &&
+          process.env.APPIUM_MCP_DATADOME_FALLBACK !== '0';
+        if (retryAllowed) {
+          log.warn(
+            `DataDome hard-block on ${block.url} (${block.detail}); relaunching once with the patchright engine.`
+          );
+          return openWebSession({
+            ...opts,
+            browser: 'patchright',
+            datadomeRetried: true,
+            // A blocked browser is not a browser to attach to again.
+            skipCdpAttach: true,
+          });
+        }
+        const why = attachedToUserBrowser
+          ? 'This session is attached to the user’s browser, so Squire cannot switch engines.'
+          : engineName === 'patchright'
+            ? 'It is still blocked with the patchright engine — the retry did not clear it.'
+            : 'The patchright retry is disabled.';
+        throw new Error(
+          `datadome_hard_block: DataDome refused ${block.url} (${block.detail}). ${why} This is IP/ASN reputation, not fingerprint; use a different egress or a warmed persistent profile.`
+        );
+      }
+    }
   }
 
   const pwDriver = new PlaywrightDriver(
@@ -891,6 +1018,7 @@ export async function openWebSession(opts: WebSessionOptions) {
   const webCapabilities = {
     platformName: 'Web',
     browserName: browserType,
+    engine: engineName,
     headless,
     viewport,
     ...(cdpPort ? { cdpPort } : {}),
@@ -991,10 +1119,10 @@ export default function createSession(server: any): void {
           'Remote Appium server URL (e.g., http://localhost:4723 or http://192.168.1.100:4723). If not provided, uses local Appium server. Not used for web/Playwright sessions.'
         ),
       browser: z
-        .enum(['chromium', 'firefox', 'webkit'])
+        .enum(['chromium', 'firefox', 'webkit', 'patchright'])
         .optional()
         .describe(
-          "For web platform only: Browser engine to use. Default is 'chromium'. Options: 'chromium', 'firefox', 'webkit' (Safari engine)."
+          "For web platform only: Browser engine to use. Default is 'chromium'. Options: 'chromium', 'firefox', 'webkit' (Safari engine), 'patchright' (chromium family driven by the optional patchright engine, which avoids the automation-detectable CDP calls stock Playwright makes and never sets navigator.webdriver; requires npm install patchright and npx patchright install chromium). A DataDome hard-block on the initial url automatically retries once with patchright; set APPIUM_MCP_DATADOME_FALLBACK=0 to disable that."
         ),
       channel: z
         .string()
