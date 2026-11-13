@@ -30,6 +30,13 @@ jobs:
         run: |
           v=$(node -p "require('./package.json').version")
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but package.json is $v"; exit 1; }
+      # The plugin launches its MCP server as `npx @sniffski/squire@<pinned>`;
+      # publishing with a stale pin ships the old server to plugin users.
+      - name: Plugin MCP pin must match package.json
+        run: |
+          v=$(node -p "require('./package.json').version")
+          pin=$(node -p "require('./plugin/.mcp.json').mcpServers.squire.args[1]")
+          [ "$pin" = "@sniffski/squire@$v" ] || { echo "plugin/.mcp.json pins $pin but package.json is $v"; exit 1; }
       - run: npm install
       - run: npm run build
       # The web tests drive a real Chromium. --with-deps runs apt, and the

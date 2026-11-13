@@ -21,6 +21,18 @@ jobs:
         with:
           node-version: 22
 
+      # The plugin launches its MCP server as `npx @sniffski/squire@<pinned>`,
+      # so a release that forgets to bump the pin ships the old server to
+      # every plugin user. Fail loudly instead.
+      - name: Check plugin MCP pin matches package version
+        run: |
+          v=$(node -p "require('./package.json').version")
+          pin=$(node -p "require('./plugin/.mcp.json').mcpServers.squire.args[1]")
+          if [ "$pin" != "@sniffski/squire@$v" ]; then
+            echo "plugin/.mcp.json pins $pin but package.json is $v"
+            exit 1
+          fi
+
       - uses: SocketDev/action@v1
         with:
           mode: firewall-free
