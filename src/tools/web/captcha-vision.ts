@@ -20,6 +20,17 @@
  * With neither a URL nor a hunch config, the caller may pass `sample` — an
  * MCP-sampling classifier answered by the client's own main model
  * (captcha-sampling.ts). The local endpoint always wins when configured.
+ *
+ * Hunch judge (grid only, opt-in):
+ *   APPIUM_MCP_CAPTCHA_HUNCH=1        enable the hunch judge for tile grids
+ *   APPIUM_MCP_CAPTCHA_HUNCH_URL      default http://127.0.0.1:8791
+ *   APPIUM_MCP_CAPTCHA_HUNCH_MODEL    default "main" (the alias in hunch.toml)
+ *
+ * Unlike the whole-grid classifier, hunch answers one closed-set yes/no per
+ * tile with a calibrated p_yes, which the caller gates at 0.9. It re-prefills
+ * the image on every check, so ask one tile per request rather than batching
+ * the grid; that shape costs ~1s per check against ~40s+ for the reasoning
+ * main model under a whole-grid prompt.
  */
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -80,6 +91,143 @@ export function visionConfig(): VisionConfig | null {
     model,
     key: process.env.APPIUM_MCP_CAPTCHA_VLM_KEY ?? process.env.VLLM_API_KEY,
   };
+}
+
+export interface HunchGridConfig {
+  /** Base URL, no trailing slash, without /v1. */
+  url: string;
+  /** hunch model alias, e.g. "main". Must be vision-capable. */
+  model: string;
+  /** p_yes at or above this counts as a selected tile. */
+  gate: number;
+}
+
+/**
+ * The hunch judge for tile grids, or null unless asked for. Off by default:
+ * the per-tile scaffold is new and only earns a place in the shipped path
+ * once it beats the whole-grid classifier in a live A/B.
+ */
+export function hunchGridConfig(): HunchGridConfig | null {
+  if (process.env.APPIUM_MCP_CAPTCHA_HUNCH !== '1') {
+    return null;
+  }
+  const base =
+    process.env.APPIUM_MCP_CAPTCHA_HUNCH_URL ?? 'http://127.0.0.1:8791';
+  return {
+    url: base.replace(/\/+$/, ''),
+    model: process.env.APPIUM_MCP_CAPTCHA_HUNCH_MODEL ?? 'main',
+    gate: 0.9,
+  };
+}
+
+const HUNCH_TILE_QUESTION = [
+  'This is ONE tile cropped from a reCAPTCHA image-challenge grid.',
+  'The whole-grid instruction is quoted at the end.',
+  'Does this single tile clearly contain any part of the requested object,',
+  'including a cut-off fragment at its edge — that is how reCAPTCHA expects',
+  'fragments to be treated? Answer yes only for a real object or a piece of',
+  'one, not for a reflection, shadow, or background glimpse.',
+].join('\n');
+
+interface HunchJudgeReply {
+  results?: Record<string, { p_yes?: number; answer?: string }>;
+  error?: { code?: string; message?: string };
+}
+
+/** One closed-set yes/no about one tile crop. Returns p_yes, or null. */
+async function askHunchTile(
+  config: HunchGridConfig,
+  prompt: string,
+  image: string,
+  timeoutMs: number
+): Promise<number | null> {
+  const body = {
+    model: config.model,
+    images: [image],
+    context: 'One reCAPTCHA grid tile',
+    checks: {
+      tile: {
+        kind: 'yesno',
+        question: `${HUNCH_TILE_QUESTION}\n\nWhole-grid instruction: ${JSON.stringify(prompt)}`,
+      },
+    },
+    reasoning: 'off',
+  };
+  let res: Response;
+  try {
+    res = await fetch(`${config.url}/v1/judge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) {
+    return null;
+  }
+  let data: HunchJudgeReply;
+  try {
+    data = (await res.json()) as HunchJudgeReply;
+  } catch {
+    return null;
+  }
+  const p = data.results?.tile?.p_yes;
+  return typeof p === 'number' ? p : null;
+}
+
+/**
+ * Judges every tile with hunch, one image per request. Returns the indices
+ * whose p_yes clears the gate, or null when the judge is unusable — callers
+ * treat null as "no answer", never as "nothing selected".
+ */
+export async function pickTilesHunch(opts: {
+  config: HunchGridConfig;
+  prompt: string;
+  tiles: Array<{ index: number; image: string }>;
+  timeoutMs?: number;
+  concurrency?: number;
+  note?: VisionNote;
+}): Promise<number[] | null> {
+  if (!opts.tiles.length) {
+    return null;
+  }
+  const scores: Array<number | null> = new Array(opts.tiles.length).fill(null);
+  const concurrency = Math.max(
+    1,
+    Math.min(opts.concurrency ?? 4, opts.tiles.length)
+  );
+  let next = 0;
+  const workers = Array.from({ length: concurrency }, async () => {
+    for (let i = next++; i < opts.tiles.length; i = next++) {
+      scores[i] = await askHunchTile(
+        opts.config,
+        opts.prompt,
+        opts.tiles[i].image,
+        opts.timeoutMs ?? 15_000
+      );
+    }
+  });
+  await Promise.all(workers);
+
+  const failed = scores.filter((s) => s === null).length;
+  if (failed) {
+    opts.note?.(`hunch: ${failed}/${scores.length} tiles unanswered`);
+  }
+  if (failed === scores.length) {
+    return null;
+  }
+  const picked = scores
+    .map((s, i) =>
+      s !== null && s >= opts.config.gate ? opts.tiles[i].index : -1
+    )
+    .filter((i) => i >= 0);
+  if (!picked.length && failed) {
+    // Some tiles failed and none cleared the gate: "nothing" would be a guess.
+    return null;
+  }
+  return picked;
 }
 
 const INSTRUCTION = [

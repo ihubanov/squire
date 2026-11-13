@@ -32,7 +32,13 @@ import { assertNotProtected } from '../../protected-urls.js';
 import { assertNotUserFocused } from '../../focus-guard.js';
 import { logActivity } from '../../activity-log.js';
 import { cueText } from '../../watch.js';
-import { pickTiles, pickTilesPerTile, visionConfig } from './captcha-vision.js';
+import {
+  hunchGridConfig,
+  pickTiles,
+  pickTilesHunch,
+  pickTilesPerTile,
+  visionConfig,
+} from './captcha-vision.js';
 import type { TileSampler } from './captcha-sampling.js';
 import { makeSamplingSampler } from './captcha-sampling.js';
 
@@ -351,7 +357,7 @@ export const recaptchaSchema = z.object({
     .boolean()
     .optional()
     .describe(
-      'Solve image grids with the configured vision endpoint (or MCP sampling when no endpoint is configured) instead of returning them as `needs_answer`. Default: on when APPIUM_MCP_CAPTCHA_VLM_URL, a claude-local hunch config, or a sampling-capable MCP client is present; this option set to false disables both. A caller-supplied `tiles`/`tilesScript` still wins.'
+      'Solve image grids with the configured vision endpoint (or MCP sampling when no endpoint is configured) instead of returning them as `needs_answer`. Default: on when APPIUM_MCP_CAPTCHA_VLM_URL, a claude-local hunch config, or a sampling-capable MCP client is present; this option set to false disables them. With APPIUM_MCP_CAPTCHA_HUNCH=1 the hunch judge runs first and falls back to the vision path. A caller-supplied `tiles`/`tilesScript` still wins.'
     ),
   visionMs: z
     .number()
@@ -393,9 +399,12 @@ export async function solveRecaptcha(
   const maxMs = args.maxMs ?? 90_000;
   const verifyMs = args.verifyMs ?? 8000;
   const vision = args.vision === false ? null : visionConfig();
-  // The local endpoint wins; sampling is the zero-config fallback.
-  const sample = args.vision === false || vision ? undefined : sampler;
-  const hasVision = Boolean(vision || sample);
+  // Off unless APPIUM_MCP_CAPTCHA_HUNCH=1. Tried before the whole-grid
+  // classifier because it answers per tile with a calibrated p_yes.
+  const hunch = args.vision === false ? null : hunchGridConfig();
+  // The local endpoint or the judge wins; sampling is the zero-config fallback.
+  const sample = args.vision === false || vision || hunch ? undefined : sampler;
+  const hasVision = Boolean(vision || sample || hunch);
   const started = Date.now();
   let lastFailure: RecaptchaError | undefined;
   let anchor: Frame | null = null;
@@ -557,6 +566,41 @@ export async function solveRecaptcha(
       return { type: 'audio', frame, prompt, url };
     }
     return null;
+  };
+
+  /**
+   * Screenshots each tile on its own, tagged with its grid index. A failed
+   * or empty crop is skipped and reported: the judges drop an unusable image
+   * and still answer confidently, so passing one would silently exclude the
+   * tile as a "no".
+   */
+  const tileCrops = async (
+    challenge: GridCapture,
+    note?: (m: string) => void
+  ): Promise<Array<{ index: number; image: string }>> => {
+    const crops: Array<{ index: number; image: string }> = [];
+    for (const tile of challenge.tiles) {
+      const png = await page
+        .screenshot({
+          clip: {
+            x: Math.max(0, Math.floor(tile.x + challenge.scroll.x)),
+            y: Math.max(0, Math.floor(tile.y + challenge.scroll.y)),
+            width: Math.max(1, Math.ceil(tile.width)),
+            height: Math.max(1, Math.ceil(tile.height)),
+          },
+          type: 'png',
+        })
+        .catch(() => null);
+      if (!png?.length) {
+        note?.(`tile ${tile.index}: crop failed — skipped`);
+        continue;
+      }
+      crops.push({
+        index: tile.index,
+        image: `data:image/png;base64,${png.toString('base64')}`,
+      });
+    }
+    return crops;
   };
 
   const reload = async (frame: Frame) => {
@@ -795,10 +839,11 @@ export async function solveRecaptcha(
         continue;
       }
 
-      // Grid: the caller's answer wins; otherwise ask the vision
-      // endpoint; otherwise hand the capture back.
+      // Grid: the caller's answer wins; otherwise the hunch judge when
+      // enabled; otherwise ask the vision endpoint; otherwise hand the
+      // capture back.
       let answerTiles = args.tiles;
-      if (!answerTiles && !args.tilesScript && hasVision) {
+      if (!answerTiles && !args.tilesScript && (hunch || hasVision)) {
         const first = challenge.tiles[0];
         const cols = first
           ? new Set(
@@ -808,73 +853,82 @@ export async function solveRecaptcha(
             ).size || 3
           : 3;
         const rows = Math.ceil(challenge.tiles.length / cols) || 3;
-        log.push(
-          `  asking vision (${vision?.model ?? 'MCP sampling'}) about a ${rows}x${cols} grid`
-        );
         const note = (m: string) => log.push(`  ${m}`);
-        const picked = await pickTiles({
-          config: vision,
-          sample,
-          prompt: challenge.prompt,
-          image: challenge.image,
-          rows,
-          cols,
-          timeoutMs: args.visionMs,
-          note,
-        }).catch((err: any) => {
-          log.push(`  vision call failed: ${err?.message ?? err}`);
-          return null;
-        });
-        if (picked) {
-          answerTiles = picked
-            .map((k) => challenge.tiles[k]?.index)
-            .filter((v): v is number => typeof v === 'number');
+        if (hunch) {
           log.push(
-            `  vision selected ${answerTiles.length ? answerTiles.join(',') : 'none'}`
+            `  asking hunch (${hunch.model}) about a ${rows}x${cols} grid, tile by tile`
           );
-        } else {
-          // The whole-grid read failed (typically a 4x4 that ran the model
-          // out of budget mid-reasoning). Ask about each tile crop instead;
-          // small images get short, reliable answers.
-          log.push('  vision gave no usable answer — asking tile by tile');
-          const crops: Array<{ index: number; image: string }> = [];
-          for (const tile of challenge.tiles) {
-            const png = await page
-              .screenshot({
-                clip: {
-                  x: Math.max(0, Math.floor(tile.x + challenge.scroll.x)),
-                  y: Math.max(0, Math.floor(tile.y + challenge.scroll.y)),
-                  width: Math.max(1, Math.ceil(tile.width)),
-                  height: Math.max(1, Math.ceil(tile.height)),
-                },
-                type: 'png',
-              })
-              .catch(() => null);
-            if (png) {
-              crops.push({
-                index: tile.index,
-                image: `data:image/png;base64,${png.toString('base64')}`,
-              });
-            }
-          }
-          const perTile = await pickTilesPerTile({
-            config: vision,
-            sample,
+          const hunchStarted = Date.now();
+          const picked = await pickTilesHunch({
+            config: hunch,
             prompt: challenge.prompt,
-            tiles: crops,
+            tiles: await tileCrops(challenge, note),
             timeoutMs: Math.min(args.visionMs ?? 15_000, 15_000),
             note,
           }).catch((err: any) => {
-            log.push(`  per-tile vision call failed: ${err?.message ?? err}`);
+            log.push(`  hunch call failed: ${err?.message ?? err}`);
             return null;
           });
-          if (perTile) {
-            answerTiles = perTile;
+          log.push(
+            `  hunch answered in ${((Date.now() - hunchStarted) / 1000).toFixed(1)}s`
+          );
+          if (picked) {
+            answerTiles = picked;
             log.push(
-              `  per-tile vision selected ${perTile.length ? perTile.join(',') : 'none'}`
+              `  hunch selected ${picked.length ? picked.join(',') : 'none'}`
             );
           } else {
-            log.push('  per-tile vision gave no usable answer');
+            log.push('  hunch gave no usable answer');
+          }
+        }
+        if (!answerTiles && hasVision) {
+          log.push(
+            `  asking vision (${vision?.model ?? 'MCP sampling'}) about a ${rows}x${cols} grid`
+          );
+          const picked = await pickTiles({
+            config: vision,
+            sample,
+            prompt: challenge.prompt,
+            image: challenge.image,
+            rows,
+            cols,
+            timeoutMs: args.visionMs,
+            note,
+          }).catch((err: any) => {
+            log.push(`  vision call failed: ${err?.message ?? err}`);
+            return null;
+          });
+          if (picked) {
+            answerTiles = picked
+              .map((k) => challenge.tiles[k]?.index)
+              .filter((v): v is number => typeof v === 'number');
+            log.push(
+              `  vision selected ${answerTiles.length ? answerTiles.join(',') : 'none'}`
+            );
+          } else {
+            // The whole-grid read failed (typically a 4x4 that ran the model
+            // out of budget mid-reasoning). Ask about each tile crop instead;
+            // small images get short, reliable answers.
+            log.push('  vision gave no usable answer — asking tile by tile');
+            const perTile = await pickTilesPerTile({
+              config: vision,
+              sample,
+              prompt: challenge.prompt,
+              tiles: await tileCrops(challenge, note),
+              timeoutMs: Math.min(args.visionMs ?? 15_000, 15_000),
+              note,
+            }).catch((err: any) => {
+              log.push(`  per-tile vision call failed: ${err?.message ?? err}`);
+              return null;
+            });
+            if (perTile) {
+              answerTiles = perTile;
+              log.push(
+                `  per-tile vision selected ${perTile.length ? perTile.join(',') : 'none'}`
+              );
+            } else {
+              log.push('  per-tile vision gave no usable answer');
+            }
           }
         }
       }

@@ -168,3 +168,41 @@ only needed to reproduce on an older build). Fixture server: `python3 -m http.se
 Raw runs: `/tmp/e2e/turnstile-matrix.txt`, `/tmp/e2e/recaptcha-v3.txt`,
 `/tmp/e2e/run-recaptcha-v2b.txt`, `/tmp/jest-full.log`, `/tmp/jest-full2.log`,
 `/tmp/jest-captcha.log`, screenshots `/tmp/e2e/2x.png`, `/tmp/e2e/3x.png`.
+
+### Hunch judge hook, off by default (2026-11-11)
+
+New grid path behind `APPIUM_MCP_CAPTCHA_HUNCH=1` (off unless exactly `1`):
+`APPIUM_MCP_CAPTCHA_HUNCH_URL` (default `http://127.0.0.1:8791`) and
+`APPIUM_MCP_CAPTCHA_HUNCH_MODEL` (default `main`). The hook asks the hunch
+judge one closed-set yes/no per tile **crop**, one image per request,
+concurrency 4, and keeps a tile when `results.tile.p_yes >= 0.9`. One image
+per request because the judge re-prefills the whole image set on every check,
+so the batched 8-image form times out; per-tile measured 8.5 s for 9 tiles on
+the Gemma alias. The whole-grid classifier still runs if the judge is
+unusable, and an all-below-gate judge answer (`[]`) is a real "select
+nothing", not a fallback.
+
+Sanity, local service, model `main`: red/blue tiles returned `p_yes` 1.0 / 0.0
+in 1.3 s; `images: []` answers text-only 200 in 0.6 s; an empty data URI is
+502 `backend_error`; `checks: {}` is 400 `invalid_request`. Failed crops are
+skipped and logged rather than passed to the judge, which would drop the
+image and answer a confident "no".
+
+Live headed demo run (`recaptcha-v2-checkbox.php`), `VLM=0`, `HUNCH=1`,
+model `main`: **FAILED** — 5 attempts, picks `1,7` / `1,6,7` / `1,6,7` /
+`1,6,7` / `1,6`, all `tiles_rejected`; 80 s total, ~16 s per attempt. The
+stable-wrong picks point at the model, not the hook: `main` here is the
+DeepSeek reasoning model, and the A/B must run the judge and the classifier
+on one Gemma VL model. The flag stays off; this run is not a scaffold
+verdict.
+
+Fair-model live run, same demo and harness, judge `gemma` on the one-token
+alias (`:8792`), `VLM=0`: **PASS on attempt 1** — judge answered in 5.1 s,
+selected `2,3,8`, token 2297, 10.0 s end to end; the demo's server echo
+reported `success => 1` with an empty `errorCodes`, and the page showed
+"Success!". Raw run: `/tmp/e2e/live-hunch-gemma.jsonl`. The shipped defaults
+stay `main` on `:8791`; Gemma is an A/B-only alias set through the test env.
+
+Tests: `src/tests/captcha-hunch.test.ts` (config, request shape, gate,
+partial failure, concurrency) and the hunch case in
+`src/tests/captcha-recaptcha.test.ts`.

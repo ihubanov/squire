@@ -335,6 +335,61 @@ describe('playwright_captcha_recaptcha', () => {
     }
   }, 30_000);
 
+  test('the hunch judge solves the grid one tile per request', async () => {
+    process.env.APPIUM_MCP_CAPTCHA_HUNCH = '1';
+    process.env.APPIUM_MCP_CAPTCHA_HUNCH_URL = 'http://judge.test';
+    const calls: string[] = [];
+    const bodies: any[] = [];
+    const spy = jest
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async (url: unknown, init?: any) => {
+        calls.push(String(url));
+        bodies.push(JSON.parse(String(init?.body)));
+        return new Response(
+          JSON.stringify({
+            results: { tile: { p_yes: 1.0, answer: 'yes' } },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      });
+    try {
+      await load(
+        HOST(
+          `window.__scenario.check = () => openChallenge(${js(GRID)});
+           window.__scenario.verify = () => setTimeout(() => setToken('tok-hunch'), 100);`
+        )
+      );
+      const res = await execs.playwright_captcha_recaptcha({
+        verifyMs: 3000,
+        maxAttempts: 1,
+      });
+      const text = res.content[0].text as string;
+      expect(text).toMatch(/^Captcha recaptcha v2: pass/);
+      expect(text).toContain(
+        'asking hunch (main) about a 3x3 grid, tile by tile'
+      );
+      expect(text).toContain('hunch selected 0,1,2,3,4,5,6,7,8');
+      expect(calls).toHaveLength(9);
+      expect(calls.every((u) => u === 'http://judge.test/v1/judge')).toBe(true);
+      for (const body of bodies) {
+        expect(body.model).toBe('main');
+        expect(body.images).toHaveLength(1);
+        expect(body.checks.tile.kind).toBe('yesno');
+        expect(body.reasoning).toBe('off');
+      }
+      const selected = await page.evaluate(
+        () => (window as any).__selected as number[]
+      );
+      expect(selected.sort((a, b) => a - b)).toEqual([
+        0, 1, 2, 3, 4, 5, 6, 7, 8,
+      ]);
+    } finally {
+      spy.mockRestore();
+      delete process.env.APPIUM_MCP_CAPTCHA_HUNCH;
+      delete process.env.APPIUM_MCP_CAPTCHA_HUNCH_URL;
+    }
+  }, 30_000);
+
   test('an unusable whole-grid answer falls back to per-tile crops', async () => {
     process.env.APPIUM_MCP_CAPTCHA_VLM = '1';
     process.env.APPIUM_MCP_CAPTCHA_VLM_URL = 'http://vision.test/v1';
