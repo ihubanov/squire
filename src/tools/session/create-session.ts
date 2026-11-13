@@ -23,6 +23,7 @@ import { IOSManager } from '../../devicemanager/ios-manager.js';
 import { PlaywrightDriver } from '../../playwright-adapter.js';
 import { markSharedWithUser } from '../../focus-guard.js';
 import { findFreePort } from '../../free-port.js';
+import { ownedBrowserEnv } from '../../browser-cleanup.js';
 import {
   resolveCdpEndpoint,
   normalizeCdpEndpoint,
@@ -604,6 +605,10 @@ export async function openWebSession(opts: WebSessionOptions) {
         // No userAgent override — see newContext below.
         locale: 'en-US',
         timezoneId: 'Europe/Sofia',
+        // Ownership marker for the SessionEnd / shutdown sweep. Playwright
+        // replaces the child environment when `env` is set, so this is the
+        // full parent env plus SQUIRE_OWNED_BROWSER=1 / SQUIRE_OWNER_PID.
+        env: ownedBrowserEnv(),
         ...(isChromium ? { args: detachArgs } : {}),
       };
       const persistentOpts = stealth
@@ -646,6 +651,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     } else if (stealth) {
       const launchOpts = {
         headless,
+        env: ownedBrowserEnv(),
         args: [
           '--disable-blink-features=AutomationControlled',
           '--no-first-run',
@@ -670,6 +676,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     } else {
       browser = await engine.launch({
         headless,
+        env: ownedBrowserEnv(),
         ...(isChromium ? { args: detachArgs } : {}),
       });
     }

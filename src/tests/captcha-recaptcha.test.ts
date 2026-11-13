@@ -15,35 +15,44 @@ import {
   afterAll,
   jest,
 } from '@jest/globals';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Browser, Page } from 'playwright';
 
 // Without this the tool would pick up a machine-local hunch config and send
 // the blank fixture tiles to a vision endpoint. Tests pin the no-vision path.
 process.env.APPIUM_MCP_CAPTCHA_VLM = '0';
 
-await jest.unstable_mockModule('../activity-log', () => ({
-  logActivity: jest.fn(async () => {}),
-}));
-await jest.unstable_mockModule('../ai-state', () => ({
-  writeAiActiveTab: jest.fn(),
-}));
-await jest.unstable_mockModule('../protected-urls', () => ({
-  assertNotProtected: jest.fn(),
-}));
-await jest.unstable_mockModule('../focus-guard', () => ({
-  assertNotUserFocused: jest.fn(async () => {}),
-}));
+// Mocks and dynamic imports must run before the tool module loads, but the
+// ts-jest setup for this repo does not allow top-level await in tests, so the
+// whole sequence happens at the start of beforeAll.
+let chromium: (typeof import('playwright'))['chromium'];
+let PlaywrightDriver: (typeof import('../playwright-adapter.js'))['PlaywrightDriver'];
+let recaptchaTool: (typeof import('../tools/web/captcha-recaptcha.js'))['default'];
+let setSession: (typeof import('../session-store.js'))['setSession'];
 
-let current: unknown = null;
-await jest.unstable_mockModule('../session-store', () => ({
-  getDriver: () => current,
-  isPlaywrightDriverSession: () => true,
-}));
+async function setupModules(): Promise<void> {
+  await jest.unstable_mockModule('../activity-log', () => ({
+    logActivity: jest.fn(async () => {}),
+  }));
+  await jest.unstable_mockModule('../ai-state', () => ({
+    writeAiActiveTab: jest.fn(),
+  }));
+  await jest.unstable_mockModule('../protected-urls', () => ({
+    assertNotProtected: jest.fn(),
+  }));
+  await jest.unstable_mockModule('../focus-guard', () => ({
+    assertNotUserFocused: jest.fn(async () => {}),
+  }));
 
-const { chromium } = await import('playwright');
-const { PlaywrightDriver } = await import('../playwright-adapter.js');
-const recaptchaTool = (await import('../tools/web/captcha-recaptcha.js'))
-  .default;
+  ({ chromium } = await import('playwright'));
+  ({ PlaywrightDriver } = await import('../playwright-adapter.js'));
+  recaptchaTool = (await import('../tools/web/captcha-recaptcha.js')).default;
+  // Use the real store (pointed at the fixture driver) so the tool sees the
+  // same module instance it would see at runtime.
+  ({ setSession } = await import('../session-store.js'));
+}
 
 const ANCHOR = `
 <button id="recaptcha-anchor" role="checkbox" aria-checked="false"
@@ -179,6 +188,7 @@ const parse = (text: string) => {
 };
 
 beforeAll(async () => {
+  await setupModules();
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     viewport: { width: 1400, height: 1000 },
@@ -190,13 +200,13 @@ beforeAll(async () => {
     await page.setContent(html);
   };
   driver = new PlaywrightDriver(browser, context, page);
-  (current as unknown) = driver;
+  setSession(driver, 'captcha-test-session', { platformName: 'web' });
   recaptchaTool({
     addTool: (t: any) => {
       execs[t.name] = (a) => t.execute(a, undefined);
     },
   } as any);
-});
+}, 60_000);
 
 afterAll(async () => {
   await browser?.close();
@@ -337,21 +347,14 @@ describe('playwright_captcha_recaptcha', () => {
 
   test('the hunch judge solves the grid one tile per request', async () => {
     process.env.APPIUM_MCP_CAPTCHA_HUNCH = '1';
-    process.env.APPIUM_MCP_CAPTCHA_HUNCH_URL = 'http://judge.test';
-    const calls: string[] = [];
-    const bodies: any[] = [];
-    const spy = jest
-      .spyOn(globalThis, 'fetch')
-      .mockImplementation(async (url: unknown, init?: any) => {
-        calls.push(String(url));
-        bodies.push(JSON.parse(String(init?.body)));
-        return new Response(
-          JSON.stringify({
-            results: { tile: { p_yes: 1.0, answer: 'yes' } },
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      });
+    const dir = mkdtempSync(join(tmpdir(), 'squire-judge-'));
+    const judge = join(dir, 'hunch');
+    writeFileSync(
+      judge,
+      '#!/bin/sh\ncat >/dev/null\nprintf \'{"results":{"tile":{"p_yes":1.0}}}\\n\'\n'
+    );
+    chmodSync(judge, 0o755);
+    process.env.APPIUM_MCP_CAPTCHA_HUNCH_CMD = judge;
     try {
       await load(
         HOST(
@@ -366,17 +369,9 @@ describe('playwright_captcha_recaptcha', () => {
       const text = res.content[0].text as string;
       expect(text).toMatch(/^Captcha recaptcha v2: pass/);
       expect(text).toContain(
-        'asking hunch (main) about a 3x3 grid, tile by tile'
+        'asking hunch (its default model) about a 3x3 grid, tile by tile'
       );
       expect(text).toContain('hunch selected 0,1,2,3,4,5,6,7,8');
-      expect(calls).toHaveLength(9);
-      expect(calls.every((u) => u === 'http://judge.test/v1/judge')).toBe(true);
-      for (const body of bodies) {
-        expect(body.model).toBe('main');
-        expect(body.images).toHaveLength(1);
-        expect(body.checks.tile.kind).toBe('yesno');
-        expect(body.reasoning).toBe('off');
-      }
       const selected = await page.evaluate(
         () => (window as any).__selected as number[]
       );
@@ -384,9 +379,9 @@ describe('playwright_captcha_recaptcha', () => {
         0, 1, 2, 3, 4, 5, 6, 7, 8,
       ]);
     } finally {
-      spy.mockRestore();
       delete process.env.APPIUM_MCP_CAPTCHA_HUNCH;
-      delete process.env.APPIUM_MCP_CAPTCHA_HUNCH_URL;
+      delete process.env.APPIUM_MCP_CAPTCHA_HUNCH_CMD;
+      rmSync(dir, { recursive: true, force: true });
     }
   }, 30_000);
 

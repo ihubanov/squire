@@ -4,7 +4,7 @@
       "command": "npx",
       "args": [
         "-y",
-        "@sniffski/squire@1.34.10"
+        "@sniffski/squire@1.34.11"
       ],
       "env": {
         "NODE_ENV": "production",

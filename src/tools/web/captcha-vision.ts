@@ -23,16 +23,23 @@
  *
  * Hunch judge (grid only, opt-in):
  *   APPIUM_MCP_CAPTCHA_HUNCH=1        enable the hunch judge for tile grids
- *   APPIUM_MCP_CAPTCHA_HUNCH_URL      default http://127.0.0.1:8791
- *   APPIUM_MCP_CAPTCHA_HUNCH_MODEL    default "main" (the alias in hunch.toml)
+ *   APPIUM_MCP_CAPTCHA_HUNCH_CMD      argv prefix (JSON array) that runs the
+ *                                     hunch CLI; default is the claude-local
+ *                                     managed venv, then `python3 -m hunch`
+ *   APPIUM_MCP_CAPTCHA_HUNCH_MODEL    model alias; unset → hunch's own
+ *                                     configured default_model ("main")
  *
- * Unlike the whole-grid classifier, hunch answers one closed-set yes/no per
- * tile with a calibrated p_yes, which the caller gates at 0.9. It re-prefills
- * the image on every check, so ask one tile per request rather than batching
- * the grid; that shape costs ~1s per check against ~40s+ for the reasoning
- * main model under a whole-grid prompt.
+ * No hunch server is started and no port is opened: each check is one
+ * `hunch judge -` child, one JSON request on stdin and one JSON reply on
+ * stdout, which is hunch's library/stdio path. Unlike the whole-grid
+ * classifier, hunch answers one closed-set yes/no per tile with a calibrated
+ * p_yes, which the caller gates at 0.9. It re-prefills the image on every
+ * check, so ask one tile per request rather than batching the grid; that
+ * shape costs ~1s per check against ~40s+ for the reasoning main model under
+ * a whole-grid prompt.
  */
-import { readFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { TileSampler } from './captcha-sampling.js';
@@ -94,12 +101,47 @@ export function visionConfig(): VisionConfig | null {
 }
 
 export interface HunchGridConfig {
-  /** Base URL, no trailing slash, without /v1. */
-  url: string;
-  /** hunch model alias, e.g. "main". Must be vision-capable. */
-  model: string;
+  /** argv prefix that runs the hunch CLI, e.g. [venv/bin/hunch]. */
+  command: string[];
+  /** Model alias; undefined lets hunch use its configured default_model. */
+  model?: string;
   /** p_yes at or above this counts as a selected tile. */
   gate: number;
+}
+
+const HUNCH_MANAGED = join(
+  homedir(),
+  '.local/share/claude-local/hunch/.venv/bin/hunch'
+);
+
+/**
+ * How to run hunch locally, in-process style: no daemon and no port. The
+ * claude-local managed venv is what Ivo's machine already has; a system
+ * `hunch` install on PATH works through the python3 fallback, and an install
+ * elsewhere can point APPIUM_MCP_CAPTCHA_HUNCH_CMD at its executable (or a
+ * JSON argv array when it needs a prefix, e.g. ["python3","/opt/hunch.pyz"]).
+ */
+function hunchCommand(): string[] {
+  const explicit = process.env.APPIUM_MCP_CAPTCHA_HUNCH_CMD?.trim();
+  if (explicit) {
+    try {
+      const parsed: unknown = JSON.parse(explicit);
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every((part) => typeof part === 'string')
+      ) {
+        return parsed;
+      }
+    } catch {
+      // A bare path is the common case; fall through to it.
+    }
+    return [explicit];
+  }
+  if (existsSync(HUNCH_MANAGED)) {
+    return [HUNCH_MANAGED];
+  }
+  return ['python3', '-m', 'hunch'];
 }
 
 /**
@@ -111,11 +153,9 @@ export function hunchGridConfig(): HunchGridConfig | null {
   if (process.env.APPIUM_MCP_CAPTCHA_HUNCH !== '1') {
     return null;
   }
-  const base =
-    process.env.APPIUM_MCP_CAPTCHA_HUNCH_URL ?? 'http://127.0.0.1:8791';
   return {
-    url: base.replace(/\/+$/, ''),
-    model: process.env.APPIUM_MCP_CAPTCHA_HUNCH_MODEL ?? 'main',
+    command: hunchCommand(),
+    model: process.env.APPIUM_MCP_CAPTCHA_HUNCH_MODEL?.trim() || undefined,
     gate: 0.9,
   };
 }
@@ -134,6 +174,67 @@ interface HunchJudgeReply {
   error?: { code?: string; message?: string };
 }
 
+/**
+ * One `hunch judge -` child: the request goes in on stdin, the reply comes
+ * back as one JSON line. No server, no port. Any failure (missing hunch,
+ * spawn error, non-zero exit, timeout, junk output) is "no answer" (null).
+ */
+function runHunchJudge(
+  command: string[],
+  input: string,
+  timeoutMs: number
+): Promise<HunchJudgeReply | null> {
+  return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command[0], [...command.slice(1), 'judge', '-'], {
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env: process.env,
+      });
+    } catch {
+      resolve(null);
+      return;
+    }
+    let settled = false;
+    let stdout = '';
+    const finish = (value: HunchJudgeReply | null) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      finish(null);
+    }, timeoutMs);
+    child.on('error', () => finish(null));
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8');
+      if (stdout.length > 1_000_000) {
+        child.kill('SIGKILL');
+        finish(null);
+      }
+    });
+    child.on('close', (code) => {
+      if (code !== 0) {
+        finish(null);
+        return;
+      }
+      try {
+        finish(JSON.parse(stdout) as HunchJudgeReply);
+      } catch {
+        finish(null);
+      }
+    });
+    // A judge that exits before reading stdin gives EPIPE; ignore it, the
+    // close handler reports the actual outcome.
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(input);
+  });
+}
+
 /** One closed-set yes/no about one tile crop. Returns p_yes, or null. */
 async function askHunchTile(
   config: HunchGridConfig,
@@ -141,8 +242,7 @@ async function askHunchTile(
   image: string,
   timeoutMs: number
 ): Promise<number | null> {
-  const body = {
-    model: config.model,
+  const body: Record<string, unknown> = {
     images: [image],
     context: 'One reCAPTCHA grid tile',
     checks: {
@@ -151,29 +251,19 @@ async function askHunchTile(
         question: `${HUNCH_TILE_QUESTION}\n\nWhole-grid instruction: ${JSON.stringify(prompt)}`,
       },
     },
-    reasoning: 'off',
+    // Tiles are a cheap closed-set call; hunch's configured `high` effort is
+    // for judgements worth thinking about.
+    effort: 'low',
   };
-  let res: Response;
-  try {
-    res = await fetch(`${config.url}/v1/judge`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch {
-    return null;
+  if (config.model) {
+    body.model = config.model;
   }
-  if (!res.ok) {
-    return null;
-  }
-  let data: HunchJudgeReply;
-  try {
-    data = (await res.json()) as HunchJudgeReply;
-  } catch {
-    return null;
-  }
-  const p = data.results?.tile?.p_yes;
+  const data = await runHunchJudge(
+    config.command,
+    JSON.stringify(body),
+    timeoutMs
+  );
+  const p = data?.results?.tile?.p_yes;
   return typeof p === 'number' ? p : null;
 }
 

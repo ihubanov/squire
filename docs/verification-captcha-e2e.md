@@ -37,7 +37,7 @@ Merge commit: `ba24d6818162bc244017fe80447812886da3a092`
   HTML that loads the real vendor JS (`https://challenges.cloudflare.com/turnstile/v0/api.js`,
   `https://www.google.com/recaptcha/api.js`) with the vendor test sitekeys.
 - Each case runs through the MCP surface: `select_platform` → `create_session(platform=web,
-  headless)` → `playwright_captcha_turnstile` / `playwright_captcha_recaptcha`, with a
+headless)` → `playwright_captcha_turnstile` / `playwright_captcha_recaptcha`, with a
   page reload between tool calls and a 3 s probe after each call. Attempts-to-pass is the
   number of tool invocations until the tool reports solved/pass.
 - Host fixture records `window.__cbFired` and the response field, read back with
@@ -45,13 +45,13 @@ Merge commit: `ba24d6818162bc244017fe80447812886da3a092`
 
 ## Results
 
-| Case | Key | Calls | Tool status | Token in page | Callback | Verdict |
-|---|---|---|---|---|---|---|
-| Turnstile always-pass, visible | `1x00000000000000000000AA` | 2 (cap 3); 3 earlier | `not solved` every call — `turnstile_widget_detected_but_checkbox_not_exposed` | after call +≈2 s (`XXXX.DUMMY.TOKEN.XXXX`, 21 ch); 0 at call time | fires once at ≈2 s | **FAILED as a pass** — tool never reports solved |
-| Turnstile always-fail, visible | `2x00000000000000000000AB` | 3 | `not solved` — `turnstile_widget_detected_but_checkbox_not_exposed` | none; widget shows "Verification failed / Troubleshoot" | none | **FAILED** (expected: this key cannot pass; wrong reason reported) |
-| Turnstile forced interaction | `3x00000000000000000000FF` | 3 | `not solved` — `turnstile_widget_detected_but_checkbox_not_exposed` | none from the tool | none | **FAILED** |
-| reCAPTCHA v2 checkbox | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` | 1 | `pass`, `verified: true`, token returned | yes — 1700 ch in `g-recaptcha-response` | fires once | **PASSED, 1 attempt, 7.2 s** |
-| reCAPTCHA v3 | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` | 1 | `unverified` (by design), token 1700 ch | n/a (v3 token returned only) | v3 has no callback contract | **PASSED as asserted (unverified)** |
+| Case                           | Key                                        | Calls                | Tool status                                                                    | Token in page                                                     | Callback                    | Verdict                                                            |
+| ------------------------------ | ------------------------------------------ | -------------------- | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------ |
+| Turnstile always-pass, visible | `1x00000000000000000000AA`                 | 2 (cap 3); 3 earlier | `not solved` every call — `turnstile_widget_detected_but_checkbox_not_exposed` | after call +≈2 s (`XXXX.DUMMY.TOKEN.XXXX`, 21 ch); 0 at call time | fires once at ≈2 s          | **FAILED as a pass** — tool never reports solved                   |
+| Turnstile always-fail, visible | `2x00000000000000000000AB`                 | 3                    | `not solved` — `turnstile_widget_detected_but_checkbox_not_exposed`            | none; widget shows "Verification failed / Troubleshoot"           | none                        | **FAILED** (expected: this key cannot pass; wrong reason reported) |
+| Turnstile forced interaction   | `3x00000000000000000000FF`                 | 3                    | `not solved` — `turnstile_widget_detected_but_checkbox_not_exposed`            | none from the tool                                                | none                        | **FAILED**                                                         |
+| reCAPTCHA v2 checkbox          | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` | 1                    | `pass`, `verified: true`, token returned                                       | yes — 1700 ch in `g-recaptcha-response`                           | fires once                  | **PASSED, 1 attempt, 7.2 s**                                       |
+| reCAPTCHA v3                   | `6LeIxAcTAAAAAJcZVRqyHh71UMIEGNQ_MXjiZKhI` | 1                    | `unverified` (by design), token 1700 ch                                        | n/a (v3 token returned only)                                      | v3 has no callback contract | **PASSED as asserted (unverified)**                                |
 
 ### Root cause of the three Turnstile failures (observed, not fixed)
 
@@ -98,11 +98,11 @@ sitekey `6LfW6wATAAAAAHLqO2pb8bDBahxlMxNdo9g947u9`), headed-by-default solver dr
 stdio MCP, tiles classified by a real vision endpoint
 (`nvidia/Nemotron-3.5-Super-VL-NVFP4` via the hunch-config fallback; not a stub):
 
-| Run | Result |
-|---|---|
-| `live3` (`playwright_captcha_recaptcha`, maxAttempts 5) | **PASS** — rounds 1-3 rejected, round 4 selected `4,7` and the widget issued a **2297-char** token; 49.2 s total. Demo form submitted; response body echoed the same token in `g-recaptcha-response` (the capture was truncated at 600 chars before the verdict line, so server-side acceptance of the token is **not** shown in the log). |
-| `auto1` (`playwright_captcha_solve`, provider auto) | **PASS** — dispatched to the reCAPTCHA solver, 48.9 s; token present in the host page (2340 ch). |
-| `live4` (repeat, 2026-11-12 later) | **FAIL** — 5/5 grid rounds rejected, 71 s, no token, `retry_cap`. |
+| Run                                                          | Result                                                                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `live3` (`playwright_captcha_recaptcha`, maxAttempts 5)      | **PASS** — rounds 1-3 rejected, round 4 selected `4,7` and the widget issued a **2297-char** token; 49.2 s total. Demo form submitted; response body echoed the same token in `g-recaptcha-response` (the capture was truncated at 600 chars before the verdict line, so server-side acceptance of the token is **not** shown in the log).   |
+| `auto1` (`playwright_captcha_solve`, provider auto)          | **PASS** — dispatched to the reCAPTCHA solver, 48.9 s; token present in the host page (2340 ch).                                                                                                                                                                                                                                             |
+| `live4` (repeat, 2026-11-12 later)                           | **FAIL** — 5/5 grid rounds rejected, 71 s, no token, `retry_cap`.                                                                                                                                                                                                                                                                            |
 | `live5-headed` (same harness, `headless: false`, under Xvfb) | **FAIL** — first headed run. Rounds 1-2 rejected on 3×3; the widget then escalated to 4×4 ("Select all squares with motorcycles"), round 3 rejected, round 4 the vision endpoint returned no usable selection → `needs_answer`, 56 s. Confirms the demo escalates grid size after repeated rejects and that the 4×4 path can lose the model. |
 
 All runs above except `live5-headed` were headless (`headless: true` in the harness), so the
@@ -125,11 +125,11 @@ an unusable whole-grid answer falls back to classifying each tile crop separatel
 
 Same harness and demo, headed, three consecutive runs on a fresh build:
 
-| Run | Result |
-|---|---|
+| Run            | Result                                                                                                                |
+| -------------- | --------------------------------------------------------------------------------------------------------------------- |
 | `live6-headed` | **PASS** — 3×3, first selection `0,3,7` accepted, 8.9 s, token 2297. Server echo: `success => 1`, empty `errorCodes`. |
-| `live7-headed` | **PASS** — 3×3, first selection `0,3,8` accepted, 7.8 s, token 2254. Server echo: success, empty `errorCodes`. |
-| `live8-headed` | **PASS** — **4×4**, first selection `8,9` accepted, 9.1 s, token 2297. Server echo: success, empty `errorCodes`. |
+| `live7-headed` | **PASS** — 3×3, first selection `0,3,8` accepted, 7.8 s, token 2254. Server echo: success, empty `errorCodes`.        |
+| `live8-headed` | **PASS** — **4×4**, first selection `8,9` accepted, 9.1 s, token 2297. Server echo: success, empty `errorCodes`.      |
 
 3/3 at ~8–9 s, versus 2/5 at 49–71 s before. The 4×4 whole-grid path is the one that
 previously returned no answer; it now answers on the first round. The per-tile fallback is
@@ -142,11 +142,11 @@ stdio by a client that advertises `sampling` and forwards `sampling/createMessag
 VL gateway. Server ran with `HOME` pointed at an empty dir so only sampling could classify.
 Same demo page, headless:
 
-| Run | Result |
-|---|---|
+| Run              | Result                                                                                                                                                                                                                                                                                                           |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `sampling-live1` | **FAIL** — 10 sampling round-trips reached the client, but the first driver reply omitted the schema-required `role: "assistant"`, so every reply was rejected and the tool correctly reported `needs_answer` (22 s). A client bug, not a solver bug — but worth noting the rejection is silent in the tool log. |
-| `sampling-live2` | **PASS** — 4 grid rounds (rejected 3 times, accepted `[4]` on round 4), 2276-char token in the host field, 49.1 s. 4 sampling calls, whole-grid only, ~1.7-2.2 s each. |
-| `sampling-live3` | **PASS** — same shape, accepted `[2]` on round 4, 2297-char token, 44.9 s. Run on the rebuilt 1.34.9; sampling failures now also surface in the run log (`sampling: …`) instead of a silent `needs_answer`. |
+| `sampling-live2` | **PASS** — 4 grid rounds (rejected 3 times, accepted `[4]` on round 4), 2276-char token in the host field, 49.1 s. 4 sampling calls, whole-grid only, ~1.7-2.2 s each.                                                                                                                                           |
+| `sampling-live3` | **PASS** — same shape, accepted `[2]` on round 4, 2297-char token, 44.9 s. Run on the rebuilt 1.34.9; sampling failures now also surface in the run log (`sampling: …`) instead of a silent `needs_answer`.                                                                                                      |
 
 The sampling reply contract matters: a result without `role: "assistant"` is schema-invalid
 and the SDK drops it. With the field present the grid path behaves the same as the local
@@ -171,9 +171,12 @@ Raw runs: `/tmp/e2e/turnstile-matrix.txt`, `/tmp/e2e/recaptcha-v3.txt`,
 
 ### Hunch judge hook, off by default (2026-11-11)
 
-New grid path behind `APPIUM_MCP_CAPTCHA_HUNCH=1` (off unless exactly `1`):
-`APPIUM_MCP_CAPTCHA_HUNCH_URL` (default `http://127.0.0.1:8791`) and
-`APPIUM_MCP_CAPTCHA_HUNCH_MODEL` (default `main`). The hook asks the hunch
+New grid path behind `APPIUM_MCP_CAPTCHA_HUNCH=1` (off unless exactly `1`).
+`APPIUM_MCP_CAPTCHA_HUNCH_CMD` optionally points at the hunch executable (or a
+JSON argv prefix); otherwise the claude-local managed venv
+(`~/.local/share/claude-local/hunch/.venv/bin/hunch`) is used, then
+`python3 -m hunch`. `APPIUM_MCP_CAPTCHA_HUNCH_MODEL` overrides the model alias;
+unset means hunch's own `default_model` ("main"). The hook asks the hunch
 judge one closed-set yes/no per tile **crop**, one image per request,
 concurrency 4, and keeps a tile when `results.tile.p_yes >= 0.9`. One image
 per request because the judge re-prefills the whole image set on every check,
@@ -200,9 +203,16 @@ Fair-model live run, same demo and harness, judge `gemma` on the one-token
 alias (`:8792`), `VLM=0`: **PASS on attempt 1** — judge answered in 5.1 s,
 selected `2,3,8`, token 2297, 10.0 s end to end; the demo's server echo
 reported `success => 1` with an empty `errorCodes`, and the page showed
-"Success!". Raw run: `/tmp/e2e/live-hunch-gemma.jsonl`. The shipped defaults
-stay `main` on `:8791`; Gemma is an A/B-only alias set through the test env.
+"Success!". Raw run: `/tmp/e2e/live-hunch-gemma.jsonl`.
+
+Transport changed the same day: those runs used hunch's HTTP service on
+`:8791`/`:8792`. The hook now spawns `hunch judge -` per check — one JSON on
+stdin, one JSON reply on stdout, process exits. No server, no port, which is
+what lets Squire inherit hunch from the agent runtime (claude-local manages
+the venv) instead of requiring a daemon. Same request body and gate; only the
+pipe is different. Re-run the live demo on the stdio transport before
+turning the flag on by default.
 
 Tests: `src/tests/captcha-hunch.test.ts` (config, request shape, gate,
-partial failure, concurrency) and the hunch case in
-`src/tests/captcha-recaptcha.test.ts`.
+partial failure, missing binary, concurrency via a fake judge executable) and
+the hunch case in `src/tests/captcha-recaptcha.test.ts`.

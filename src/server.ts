@@ -8,6 +8,7 @@ import {
   safeDeleteSessionsForConnection,
 } from './session-store.js';
 import { runWithConnection } from './connection-context.js';
+import { killOwnedBrowsers } from './browser-cleanup.js';
 import log from './logger.js';
 
 const server = new FastMCP({
@@ -109,6 +110,32 @@ server.on('disconnect', async (event) => {
 // drivers) don't leak when the service is stopped/restarted. With
 // disconnect-cleanup disabled in httpStream mode, this is the only place
 // sessions get torn down automatically.
+const DELETE_ALL_TIMEOUT_MS = 5_000;
+
+/**
+ * `deleteSession()` can wedge on a browser that stopped answering. Shutdown
+ * must not hang on it: the parent process would SIGKILL us and leave the
+ * browser orphaned, which is exactly the leak we are fixing. Give the normal
+ * close a bounded window, then force the marker sweep below.
+ */
+async function deleteAllWithin(ms: number): Promise<number> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`session cleanup timed out after ${ms}ms`)),
+      ms
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([safeDeleteAllSessions(), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) {
@@ -117,11 +144,23 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   log.info(`Received ${signal}, cleaning up active sessions before exit...`);
   try {
-    const deletedCount = await safeDeleteAllSessions();
+    const deletedCount = await deleteAllWithin(DELETE_ALL_TIMEOUT_MS);
     log.info(`${deletedCount} session(s) cleaned up on shutdown.`);
   } catch (error) {
     log.error('Error cleaning up sessions on shutdown:', error);
   } finally {
+    // Closing the sessions normally takes the browsers down. This sweeps
+    // whatever still carries our ownership marker — a wedged close, a
+    // browser Playwright detached, or a crash in the middle of a launch.
+    const killed = await killOwnedBrowsers({
+      ownerPid: process.pid,
+      graceMs: 300,
+    }).catch(() => []);
+    if (killed.length) {
+      log.warn(
+        `Force-closed ${killed.length} browser process(es) left behind by session cleanup.`
+      );
+    }
     process.exit(0);
   }
 }
@@ -148,14 +187,27 @@ function idleReapMs(): number {
 
 async function reapNow(trigger: string): Promise<void> {
   const idleMs = idleReapMs();
-  if (idleMs === 0) {
-    return;
-  } // disabled
   try {
-    const { reaped, ids } = await reapIdleSessions(idleMs);
-    if (reaped > 0) {
+    // APPIUM_MCP_IDLE_REAP_MS=0 disables the idle reaper, not the orphan
+    // sweep: a browser whose server is gone can never be used again.
+    if (idleMs > 0) {
+      const { reaped, ids } = await reapIdleSessions(idleMs);
+      if (reaped > 0) {
+        log.info(
+          `Idle reaper (${trigger}) closed ${reaped} session(s): ${ids.join(', ')}`
+        );
+      }
+    }
+    // Sessions only know about their own browser. A previous server that was
+    // SIGKILLed leaves started browsers with no session and no owner; the
+    // marker sweep is what actually removes those.
+    const killed = await killOwnedBrowsers({
+      orphansOnly: true,
+      graceMs: 300,
+    }).catch(() => []);
+    if (killed.length) {
       log.info(
-        `Idle reaper (${trigger}) closed ${reaped} session(s): ${ids.join(', ')}`
+        `Orphan sweep (${trigger}) closed ${killed.length} browser process(es) whose server is gone.`
       );
     }
   } catch (error) {
@@ -176,7 +228,12 @@ if (idleReapMs() > 0) {
 }
 
 // On-demand sweep: the plugin session-end hook sends SIGUSR2 to force an
-// immediate cleanup of idle browsers when a Claude session ends.
+// immediate cleanup of idle browsers when a Claude session ends. It is
+// deliberately the only signal: the hook cannot prove which stdio server
+// belongs to the session that just ended, so it must never ask a server to
+// close everything. A private stdio server still closes all its sessions on
+// SIGTERM (the client closes its stdin at session end), and the orphan sweep
+// above catches browsers whose server died without that chance.
 process.on('SIGUSR2', () => void reapNow('SIGUSR2'));
 
 export default server;

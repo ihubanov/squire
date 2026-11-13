@@ -856,7 +856,7 @@ export async function solveRecaptcha(
         const note = (m: string) => log.push(`  ${m}`);
         if (hunch) {
           log.push(
-            `  asking hunch (${hunch.model}) about a ${rows}x${cols} grid, tile by tile`
+            `  asking hunch (${hunch.model ?? 'its default model'}) about a ${rows}x${cols} grid, tile by tile`
           );
           const hunchStarted = Date.now();
           const picked = await pickTilesHunch({
