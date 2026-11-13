@@ -104,6 +104,17 @@ export interface WebSessionOptions {
    * When given, a failed attach always throws.
    */
   cdpEndpoint?: string;
+  /**
+   * Playwright channel for the browser binary, e.g. "chrome" for the
+   * installed Google Chrome stable or "msedge" for Edge. Chromium only.
+   * When set, that exact binary must exist — there is no fallback.
+   */
+  channel?: string;
+  /**
+   * Explicit browser executable path. Chromium only. Wins over `channel`.
+   * When set, that exact binary must exist — there is no fallback.
+   */
+  executablePath?: string;
 }
 
 // Define capabilities type
@@ -388,6 +399,9 @@ export async function openWebSession(opts: WebSessionOptions) {
   let page!: import('playwright').Page;
   // The persistent profile actually opened, if any (for the session reply).
   let persistentProfile: string | undefined;
+  // Which browser binary actually launched, for the session reply — e.g.
+  // "Google Chrome (channel chrome)" or "bundled Chromium (fallback)".
+  let launchedBinary: string | undefined;
   // CDP debug port of a browser we launch ourselves (undefined in
   // CDP-attach mode or when disabled via APPIUM_MCP_CDP_PORT=0).
   let cdpPort: number | undefined;
@@ -583,6 +597,24 @@ export async function openWebSession(opts: WebSessionOptions) {
     // remaining automation fingerprints via an init script.
     // Set APPIUM_MCP_STEALTH=0 to opt back into plain launch.
     const stealth = isChromium && process.env.APPIUM_MCP_STEALTH !== '0';
+    // Explicit binary selection. `channel: "chrome"` pins installed Google
+    // Chrome stable; `executablePath` pins an exact file. Either one means
+    // "use this binary" — a missing binary is an error, never a silent
+    // fallback to Playwright's bundled Chromium (Chrome for Testing, which
+    // announces "only for automated testing" and hurts site trust).
+    const channel = opts.channel?.trim() || undefined;
+    const executablePath = opts.executablePath?.trim() || undefined;
+    const explicitBinary = !!(channel || executablePath);
+    if (explicitBinary && !isChromium) {
+      throw new Error(
+        `channel/executablePath select a Chromium-family binary; not supported for ${browserType}. Use browser: 'chromium'.`
+      );
+    }
+    const binaryLaunchOpts = executablePath
+      ? { executablePath }
+      : channel
+        ? { channel }
+        : {};
     const userDataDir = opts.userDataDir?.trim()
       ? opts.userDataDir.trim().replace(/^~(?=$|\/)/, process.env.HOME ?? '~')
       : undefined;
@@ -625,53 +657,89 @@ export async function openWebSession(opts: WebSessionOptions) {
           }
         : contextOpts;
       try {
-        context = await engine.launchPersistentContext(
-          userDataDir,
-          stealth ? { ...persistentOpts, channel: 'chrome' } : persistentOpts
-        );
+        context = await engine.launchPersistentContext(userDataDir, {
+          ...persistentOpts,
+          ...(explicitBinary
+            ? binaryLaunchOpts
+            : stealth
+              ? { channel: 'chrome' }
+              : {}),
+        });
         browser = context.browser() as import('playwright').Browser;
+        launchedBinary = explicitBinary
+          ? executablePath
+            ? `custom executable ${executablePath}`
+            : `channel ${channel}`
+          : stealth
+            ? 'Google Chrome stable (channel chrome)'
+            : undefined;
       } catch (e) {
+        if (explicitBinary) {
+          throw new Error(
+            `Could not launch the requested browser (${executablePath ?? `channel ${channel}`}): ${(e as Error).message}`
+          );
+        }
         if (!stealth) {
           throw e;
         }
         log.warn(
-          `Could not launch system Chrome channel (${(e as Error).message}); falling back to bundled Chromium.`
+          `Could not launch installed Google Chrome (channel chrome) (${(e as Error).message}); falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome, or pass channel: 'chrome' to make this an error instead.`
         );
         context = await engine.launchPersistentContext(
           userDataDir,
           persistentOpts
         );
         browser = context.browser() as import('playwright').Browser;
+        launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
       }
       if (!browser) {
         throw new Error(
           `Persistent profile ${userDataDir} opened without a browser handle — close any other browser using it and retry.`
         );
       }
-    } else if (stealth) {
+    } else if (stealth || explicitBinary) {
       const launchOpts = {
         headless,
         env: ownedBrowserEnv(),
-        args: [
-          '--disable-blink-features=AutomationControlled',
-          '--no-first-run',
-          '--no-default-browser-check',
-          '--disable-infobars',
-          ...detachArgs,
-        ],
-        ignoreDefaultArgs: ['--enable-automation'],
+        ...(stealth
+          ? {
+              args: [
+                '--disable-blink-features=AutomationControlled',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-infobars',
+                ...detachArgs,
+              ],
+              ignoreDefaultArgs: ['--enable-automation'],
+            }
+          : { args: detachArgs }),
       };
       try {
-        // Real Google Chrome binary — least detectable.
+        // Explicit selection wins; otherwise the installed Google Chrome
+        // binary — least detectable.
         browser = await chromium.launch({
           ...launchOpts,
-          channel: 'chrome',
+          ...(explicitBinary ? binaryLaunchOpts : { channel: 'chrome' }),
         });
+        launchedBinary = explicitBinary
+          ? executablePath
+            ? `custom executable ${executablePath}`
+            : `channel ${channel}`
+          : 'Google Chrome stable (channel chrome)';
       } catch (e) {
+        if (explicitBinary) {
+          throw new Error(
+            `Could not launch the requested browser (${executablePath ?? `channel ${channel}`}): ${(e as Error).message}`
+          );
+        }
+        if (!stealth) {
+          throw e;
+        }
         log.warn(
-          `Could not launch system Chrome channel (${(e as Error).message}); falling back to bundled Chromium.`
+          `Could not launch installed Google Chrome (channel chrome) (${(e as Error).message}); falling back to bundled Chromium — sites will see Chrome for Testing and may treat it as automation. Install Google Chrome, or pass channel: 'chrome' to make this an error instead.`
         );
         browser = await chromium.launch(launchOpts);
+        launchedBinary = 'bundled Chromium (Chrome for Testing) — fallback';
       }
     } else {
       browser = await engine.launch({
@@ -803,6 +871,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     viewport,
     initialUrl,
     cdpPort,
+    browserBinary: launchedBinary,
     userDataDir: persistentProfile,
     attachedToUserBrowser,
     attachError,
@@ -822,7 +891,7 @@ export default function createSession(server: any): void {
       WORKFLOW FOR WEB (Playwright):
       - Use select_platform with platform='web' first
       - Then call create_session with platform='web'
-      - Optionally specify browser (chromium, firefox, webkit) and headless mode
+      - Optionally specify browser (chromium, firefox, webkit), channel ('chrome' for installed Google Chrome stable), executablePath, and headless mode. Chromium defaults to installed Google Chrome and falls back to bundled Chromium (Chrome for Testing); pass channel: 'chrome' to require real Chrome instead of falling back.
       - When AI_COLLEAGUE_CDP_ENDPOINT / APPIUM_MCP_CDP_ENDPOINT is set, this attaches to the user's already-running Chromium window (the one they can see); focus/protected-tab guards apply there. Otherwise Playwright launches a fresh browser fully detached from any Chrome/Chromium the user already has open (own process/profile/window class, own CDP debug port chosen to be free — APPIUM_MCP_CDP_PORT sets the preferred port, 0/none disables); no focus guards apply to a detached browser. Either way it's a real browser — full JavaScript, cookies, redirects, captchas all behave like for a human user.
       WORKFLOW FOR REMOTE SERVERS (remoteServerUrl provided):
       - SKIP select_platform tool entirely
@@ -857,6 +926,18 @@ export default function createSession(server: any): void {
         .optional()
         .describe(
           "For web platform only: Browser engine to use. Default is 'chromium'. Options: 'chromium', 'firefox', 'webkit' (Safari engine)."
+        ),
+      channel: z
+        .string()
+        .optional()
+        .describe(
+          "For web platform with chromium only: the installed browser channel to launch, e.g. 'chrome' (Google Chrome stable) or 'msedge'. Default when chromium: try installed Google Chrome and fall back to Playwright's bundled Chromium (Chrome for Testing). Pass 'chrome' to require real Chrome — if it is not installed the call fails instead of falling back. The session reply says which binary actually launched."
+        ),
+      executablePath: z
+        .string()
+        .optional()
+        .describe(
+          "For web platform with chromium only: absolute path to the browser executable. Wins over 'channel'. A missing file is an error, never a fallback to bundled Chromium."
         ),
       headless: z
         .preprocess((val) => {
@@ -919,6 +1000,7 @@ export default function createSession(server: any): void {
             initialUrl,
             cdpPort,
             userDataDir,
+            browserBinary,
             attachedToUserBrowser,
             attachError,
             attachedInfo,
@@ -929,6 +1011,8 @@ export default function createSession(server: any): void {
             viewport: args.viewport,
             cdpEndpoint: args.cdpEndpoint,
             userDataDir: args.userDataDir,
+            channel: args.channel,
+            executablePath: args.executablePath,
             onWaiting: (m) => _context?.log?.info?.(m),
           });
 
@@ -938,7 +1022,7 @@ export default function createSession(server: any): void {
             content: [
               {
                 type: 'text',
-                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? `\nMode: attached to user browser (CDP)${attachedInfo ? `: ${attachedInfo}` : ''}` : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}${userDataDir ? `\nPersistent profile: ${userDataDir} (cookies and history survive delete_session)` : ''}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. Fix that, then delete this session and create it again.` : ''}`,
+                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}${browserBinary ? ` — ${browserBinary}` : ''}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? `\nMode: attached to user browser (CDP)${attachedInfo ? `: ${attachedInfo}` : ''}` : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}${userDataDir ? `\nPersistent profile: ${userDataDir} (cookies and history survive delete_session)` : ''}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. Fix that, then delete this session and create it again.` : ''}`,
               },
             ],
           };
