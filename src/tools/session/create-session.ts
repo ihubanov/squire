@@ -28,6 +28,7 @@ import {
   normalizeCdpEndpoint,
   assertAllowedCdpHost,
   CONTROL_REVOKED_PREFIX,
+  CHROME_REFUSED_PREFIX,
   explainAttachError,
   profileDirForPort,
   openProfileNames,
@@ -496,9 +497,13 @@ export async function openWebSession(opts: WebSessionOptions) {
         wsOrHttp,
         CDP_CONNECT_TIMEOUT_MS
       );
-      if (reason.startsWith(CONTROL_REVOKED_PREFIX)) {
-        // The user took the browser back. A detached browser instead would
-        // be just as wrong as a retry.
+      if (
+        reason.startsWith(CONTROL_REVOKED_PREFIX) ||
+        reason.startsWith(CHROME_REFUSED_PREFIX)
+      ) {
+        // The user took the browser back, or has not accepted Chrome's
+        // Allow prompt yet. A detached browser would be just as wrong as a
+        // retry: the caller needs to relay the reason to the user.
         throw new Error(reason);
       }
       if (cdpRequired) {

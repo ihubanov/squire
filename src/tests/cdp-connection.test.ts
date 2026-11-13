@@ -3,6 +3,7 @@
  * Allow prompt), errors that say what to do, and profile names.
  */
 import { describe, test, expect, beforeEach, afterAll } from '@jest/globals';
+import { setDefaultResultOrder } from 'node:dns';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -175,6 +176,37 @@ describe('one pool per browser', () => {
   beforeEach(() => resetUserBrowser());
   afterAll(() => {
     delete process.env.APPIUM_MCP_CDP_KEEP_CONNECTION;
+  });
+
+  test('localhost and 127.0.0.1 are one browser: one relay, one Allow', async () => {
+    // Resolve localhost to IPv4 so it reaches the 127.0.0.1-only test server.
+    setDefaultResultOrder('ipv4first');
+    const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+    await new Promise<void>((r) => server.once('listening', () => r()));
+    let connections = 0;
+    server.on('connection', () => connections++);
+    const port = (server.address() as AddressInfo).port;
+    const byIp = `ws://127.0.0.1:${port}/devtools/browser/x`;
+    const byName = `ws://localhost:${port}/devtools/browser/x`;
+    let relay: Awaited<ReturnType<typeof getRelay>> | undefined;
+    try {
+      relay = await getRelay(byIp, 5000);
+      const second = await getRelay(byName, 5000);
+      expect(relay.fresh).toBe(true);
+      expect(second.fresh).toBe(false);
+      expect(second.relay).toBe(relay.relay);
+      expect(connections).toBe(1);
+
+      acquireUserBrowser(byIp);
+      acquireUserBrowser(byName);
+      expect(userCount(byIp)).toBe(2);
+      releaseUserBrowser(byName);
+      expect(userCount(byIp)).toBe(1);
+    } finally {
+      relay?.relay.close();
+      await new Promise<void>((r) => server.close(() => r()));
+      setDefaultResultOrder('verbatim');
+    }
   });
 
   test('two browsers get their own relays and session counts', async () => {

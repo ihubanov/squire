@@ -136,6 +136,26 @@ export function normalizeCdpEndpoint(endpoint: string): string {
 const LOOPBACK = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)$/i;
 
 /**
+ * The key a browser's connection pool entry lives under. The same Chrome
+ * named as localhost, 127.0.0.1, ::1 or [::1] is one browser and must get
+ * one Allow prompt, so rewrite a loopback host to 127.0.0.1. Only the key
+ * changes: the URL handed to the WebSocket keeps the caller's spelling.
+ * Unparseable URLs are returned unchanged.
+ */
+export function canonicalCdpKey(url: string): string {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return url;
+  }
+  if (LOOPBACK.test(u.hostname)) {
+    u.hostname = '127.0.0.1';
+  }
+  return u.toString();
+}
+
+/**
  * A cdpEndpoint passed to create_session comes from the caller, and on a
  * shared backend anyone who can reach it is a caller, so only loopback
  * hosts are accepted unless APPIUM_MCP_CDP_ALLOWED_HOSTS (comma-separated
@@ -206,6 +226,9 @@ function gateFault(msg: string): string | undefined {
   )?.[1];
 }
 
+/** Prefix for an attach intervening Chrome itself refused (Allow not accepted). */
+export const CHROME_REFUSED_PREFIX = 'Chrome refused the CDP connection';
+
 /** Prefix for an attach that got past Allow but failed afterwards. */
 export const ACCEPTED_PREFIX = 'Chrome accepted the connection, but';
 
@@ -226,6 +249,16 @@ export function explainAttachError(
     return fault === 'unauthorized'
       ? `the browser gate at ${endpoint} rejected Squire's credentials (423 unauthorized). This is a configuration problem, not the user taking control${hint ? `: ${hint}` : ''}.`
       : `the browser gate at ${endpoint} cannot reach herdr-web (423 unreachable), so it refuses all connections. This is an infrastructure problem, not the user taking control${hint ? `: ${hint}` : ''}.`;
+  }
+  // Chrome's remote-debugging toggle answers a refused upgrade of its
+  // browser WebSocket with 403: the user did not click Allow. That is not
+  // the user taking control (herdr's pane gate owns 401/423 semantics).
+  if (
+    /Unexpected server response: 403\b/.test(msg) &&
+    /\/devtools\/browser\//.test(resolved)
+  ) {
+    const status = /Unexpected server response: (\d+)/.exec(msg)?.[1];
+    return `${CHROME_REFUSED_PREFIX}${status ? ` (${status})` : ''}: its "Allow remote debugging" prompt was not accepted — it may have been denied, dismissed, or still be waiting. Ask the user to click Allow in Chrome, then retry create_session.`;
   }
   if (isControlRevoked(err)) {
     const status = /Unexpected server response: (\d+)/.exec(msg)?.[1];

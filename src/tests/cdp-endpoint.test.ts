@@ -8,7 +8,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { resolveCdpEndpoint, toBrowserWebSocketUrl } from '../cdp-endpoint.js';
+import {
+  canonicalCdpKey,
+  explainAttachError,
+  resolveCdpEndpoint,
+  toBrowserWebSocketUrl,
+} from '../cdp-endpoint.js';
 
 let dir: string;
 let other: string;
@@ -93,6 +98,56 @@ describe('resolveCdpEndpoint', () => {
         dir,
       ])
     ).toBe('ws://127.0.0.1:9333/devtools/browser/abc-123');
+  });
+});
+
+describe('canonicalCdpKey', () => {
+  test('loopback spellings of the same browser produce one key', () => {
+    const expected = canonicalCdpKey(
+      'ws://127.0.0.1:9222/devtools/browser/abc'
+    );
+    expect(expected).toBe('ws://127.0.0.1:9222/devtools/browser/abc');
+    for (const url of [
+      'ws://localhost:9222/devtools/browser/abc',
+      'ws://[::1]:9222/devtools/browser/abc',
+    ]) {
+      expect(canonicalCdpKey(url)).toBe(expected);
+    }
+  });
+
+  test('preserves path and query, and leaves non-loopback hosts alone', () => {
+    expect(
+      canonicalCdpKey('ws://localhost:9222/devtools/browser/abc?x=1')
+    ).toBe('ws://127.0.0.1:9222/devtools/browser/abc?x=1');
+    expect(
+      canonicalCdpKey('ws://chrome.example:9222/devtools/browser/abc')
+    ).toBe('ws://chrome.example:9222/devtools/browser/abc');
+    expect(canonicalCdpKey('not a url')).toBe('not a url');
+  });
+});
+
+describe('explainAttachError when Chrome refuses the toggle', () => {
+  test('a 403 on the browser WebSocket asks the user to click Allow', () => {
+    const msg = explainAttachError(
+      new Error('Unexpected server response: 403'),
+      'http://localhost:9222',
+      'ws://localhost:9222/devtools/browser/abc-123',
+      90_000
+    );
+    expect(msg).not.toMatch(/Control revoked/);
+    expect(msg).not.toMatch(/taken control/);
+    expect(msg).toMatch(/Allow/);
+    expect(msg).toMatch(/403/);
+  });
+
+  test('a bare 403 on HTTP discovery is still control revoked', () => {
+    const msg = explainAttachError(
+      new Error('Unexpected server response: 403'),
+      'http://127.0.0.1:9222',
+      'http://127.0.0.1:9222',
+      90_000
+    );
+    expect(msg).toMatch(/Control revoked/);
   });
 });
 

@@ -21,4 +21,11 @@ Operating rules:
 - Keep the main context clean: do not paste whole page sources back. Summarize what you found and include only the specific data or elements asked for.
 - Never exfiltrate credentials or page contents to any external service. Report only to the caller.
 
+Attaching to the user's browser:
+
+- **Allow is per connection.** Chrome's `chrome://inspect` toggle asks the user to click Allow for every new DevTools connection; there is no persistent Allow. Never open your own CDP/WebSocket connection alongside Squire — do everything through Squire's tools, which share one connection.
+- **A 403 means Allow was not clicked.** If `create_session` fails with a 403 (or "Chrome refused the CDP connection …"), ask the user to click Allow in Chrome and retry once. It is not the user taking control; do not loop.
+- **Pick the right profile.** One Chrome can hold several profiles with separate logins. Choose by the tabs in `playwright_list_tabs` (for example the one with the user's work email or GitHub), open tabs with `sameProfileAs`, and ask if unsure. A browser that seems "wrong" usually means the wrong profile.
+- **Secrets shown once.** A value read with `playwright_evaluate` normally enters the transcript. To put a one-time secret (such as an API key in a dialog) into a local file without returning it, pass `saveTo` — the file is written 0600 and only its path comes back. If that path is unavailable, say so; never use a side connection.
+
 Return a short structured result: what you did, the evidence you verified it with, and the data or answer requested.

@@ -13,6 +13,9 @@ import {
   afterAll,
   jest,
 } from '@jest/globals';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Browser, Page } from 'playwright';
 
 await jest.unstable_mockModule('../activity-log', () => ({
@@ -734,5 +737,31 @@ describe('playwright_evaluate result rendering', () => {
       format: 'json',
     });
     expect(res.content[0].text).toMatch(/Result: "line1\\nline2"/);
+  }, 15_000);
+
+  test('saveTo writes the value 0600 and never returns it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'squire-eval-'));
+    const file = join(dir, 'nested', 'secret.txt');
+    try {
+      const res = await execs.playwright_evaluate({
+        script: `'sk-live-SECRET\\nline2'`,
+        saveTo: file,
+      });
+      const text = res.content[0].text as string;
+      expect(text).not.toContain('sk-live-SECRET');
+      expect(text).toMatch(/mode 0600/);
+      expect(readFileSync(file, 'utf8')).toBe('sk-live-SECRET\nline2');
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  test('saveTo rejects a relative path', async () => {
+    const res = await execs.playwright_evaluate({
+      script: '1',
+      saveTo: 'relative.txt',
+    });
+    expect(res.content[0].text).toMatch(/saveTo must be an absolute path/);
   }, 15_000);
 });

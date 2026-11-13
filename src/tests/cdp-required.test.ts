@@ -224,7 +224,7 @@ describe('per-session cdpEndpoint', () => {
     expect(launch).not.toHaveBeenCalled();
   });
 
-  test('a 403 from the endpoint is "control revoked", even without REQUIRED', async () => {
+  test("a 403 on Chrome's browser WebSocket means Allow was not clicked, not a takeover", async () => {
     const http = await import('node:http');
     let hits = 0;
     const gate = http.createServer((_req, res) => {
@@ -237,17 +237,20 @@ describe('per-session cdpEndpoint', () => {
     });
     await new Promise<void>((r) => gate.listen(0, '127.0.0.1', r));
     const port = (gate.address() as import('node:net').AddressInfo).port;
+    const ws = `ws://127.0.0.1:${port}/devtools/browser/x`;
+    process.env.APPIUM_MCP_CDP_ENDPOINT = ws;
     try {
-      process.env.APPIUM_MCP_CDP_ENDPOINT = `http://127.0.0.1:${port}`;
-      await expect(web({})).rejects.toThrow(/Control revoked:.*do not retry/);
-      const before = hits;
-      await expect(web({ cdpEndpoint: `127.0.0.1:${port}` })).rejects.toThrow(
-        /Control revoked:/
+      // The denied/dismissed/pending Allow prompt: ask the user to click it.
+      await expect(web({})).rejects.toThrow(
+        /Chrome refused the CDP connection \(403\).*click Allow.*retry/i
       );
-      // One attempt per call: discovery, then the version lookup. No retry loop.
-      expect(hits - before).toBeLessThanOrEqual(2);
+      const err = await web({ cdpEndpoint: ws }).catch((e: Error) => e);
+      expect(err.message).not.toMatch(/Control revoked/);
+      // One WebSocket attempt per call. No retry loop.
+      expect(hits).toBeLessThanOrEqual(2);
       expect(launch).not.toHaveBeenCalled();
     } finally {
+      delete process.env.APPIUM_MCP_CDP_ENDPOINT;
       await new Promise<void>((r) => gate.close(() => r()));
     }
   });

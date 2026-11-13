@@ -1,6 +1,9 @@
 /**
  * Tool to evaluate JavaScript in a Playwright web session
  */
+import { randomBytes } from 'node:crypto';
+import { chmod, mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import type { ContentResult, FastMCP } from 'fastmcp';
 import { z } from 'zod';
 import { getDriver, isPlaywrightDriverSession } from '../../session-store.js';
@@ -22,6 +25,32 @@ function cap(s: string, max: number): string {
   const half = Math.floor((max - 60) / 2);
   const cut = s.length - half * 2;
   return `${s.slice(0, half)}\n… [truncated ${cut} of ${s.length} chars; raise maxLength or narrow the script] …\n${s.slice(-half)}`;
+}
+
+/**
+ * Write the result to `path` without ever returning it. A temp file in the
+ * same directory is written with mode 0600, then renamed over the target, so
+ * a reader never sees a half-written secret.
+ */
+async function saveResult(path: string, body: string): Promise<number> {
+  if (!isAbsolute(path)) {
+    throw new Error(`saveTo must be an absolute path, got "${path}"`);
+  }
+  const dir = dirname(path);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  const tmp = join(
+    dir,
+    `.${basename(path)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`
+  );
+  try {
+    await writeFile(tmp, body, { mode: 0o600, flag: 'wx' });
+    await chmod(tmp, 0o600);
+    await rename(tmp, path);
+  } catch (err) {
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
+  return Buffer.byteLength(body);
 }
 
 /** Registers playwright_evaluate. */
@@ -52,12 +81,18 @@ export default function evaluate(server: FastMCP): void {
       .describe(
         'Character cap for the returned value (default 20000). Above the cap the middle is cut and both ends are kept, with an explicit marker giving the total size — so a long result is trimmed visibly, never silently.'
       ),
+    saveTo: z
+      .string()
+      .optional()
+      .describe(
+        'Absolute path to write the result to instead of returning it. The file is created atomically with mode 0600 (parent directories as needed), and the value is never echoed in the response — only the path and a byte count. Use it for a secret shown once (an API key in a dialog) that must not enter model context.'
+      ),
   });
 
   server.addTool({
     name: 'playwright_evaluate',
     description:
-      "Run a JavaScript expression in the AI's active tab and get the result back. Use this to scrape structured data from a page (`document.querySelectorAll(...).map(e => e.textContent)`), call a page's own JS API, fetch a JSON endpoint via `fetch(...)` from the page's origin (useful for SearXNG's /search?format=json), or check page state. The page is real and live — DOM, cookies, network are all what a human would see. Strings come back verbatim (newlines and all); long values are trimmed in the middle with an explicit marker, so nothing is cut silently.",
+      "Run a JavaScript expression in the AI's active tab and get the result back. Use this to scrape structured data from a page (`document.querySelectorAll(...).map(e => e.textContent)`), call a page's own JS API, fetch a JSON endpoint via `fetch(...)` from the page's origin (useful for SearXNG's /search?format=json), or check page state. The page is real and live — DOM, cookies, network are all what a human would see. Strings come back verbatim (newlines and all); long values are trimmed in the middle with an explicit marker, so nothing is cut silently. Pass saveTo to write the result straight to a 0600 file and keep it out of the response — the way to capture a secret shown once.",
     parameters: evaluateSchema,
     annotations: {
       readOnlyHint: false,
@@ -94,6 +129,23 @@ export default function evaluate(server: FastMCP): void {
                 : typeof result === 'string'
                   ? result
                   : json();
+        if (args.saveTo !== undefined) {
+          const bytes = await saveResult(args.saveTo, rendered);
+          logActivity({
+            tool: 'playwright_evaluate',
+            tab: driver.page.url(),
+            status: 'ok',
+            detail: `${args.script.slice(0, 60)} → ${args.saveTo}`,
+          });
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Script executed successfully${frame === driver.page.mainFrame() ? '' : ` in frame ${frame.url()}`}. Result written to ${args.saveTo} (${bytes} bytes, mode 0600). The value is not returned in this response.`,
+              },
+            ],
+          };
+        }
         const resultStr = cap(rendered, args.maxLength ?? DEFAULT_MAX);
         logActivity({
           tool: 'playwright_evaluate',

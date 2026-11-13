@@ -12,11 +12,12 @@
  * drops its "controlled by automated software" state.
  */
 import type { Browser } from 'playwright';
+import { canonicalCdpKey } from './cdp-endpoint.js';
 import { openCdpRelay, type CdpRelay } from './cdp-proxy.js';
 
 type Connect = (endpoint: string) => Promise<Browser>;
 
-/** Per attached browser, keyed by its upstream WebSocket URL. */
+/** Per attached browser, keyed by its canonical upstream WebSocket URL. */
 interface Pool {
   relay?: CdpRelay;
   relayPending?: Promise<CdpRelay>;
@@ -48,7 +49,7 @@ export async function getRelay(
   timeoutMs: number,
   onWaiting?: () => void
 ): Promise<{ relay: CdpRelay; fresh: boolean }> {
-  const p = pool(upstreamUrl);
+  const p = pool(canonicalCdpKey(upstreamUrl));
   if (p.relay?.isOpen()) {
     return { relay: p.relay, fresh: false };
   }
@@ -94,7 +95,9 @@ export async function getUserBrowser(
         if (entry.browser === b) {
           entry.browser = undefined;
           for (const p of pools.values()) {
-            if (p.relay?.url === endpoint) {
+            if (
+              canonicalCdpKey(p.relay?.url ?? '') === canonicalCdpKey(endpoint)
+            ) {
               p.users = 0;
             }
           }
@@ -115,7 +118,7 @@ export async function getUserBrowser(
 
 /** A session started using the connection to the Chrome at `upstreamUrl`. */
 export function acquireUserBrowser(upstreamUrl: string): void {
-  const p = pool(upstreamUrl);
+  const p = pool(canonicalCdpKey(upstreamUrl));
   p.users++;
   clearTimeout(p.idleTimer);
   p.idleTimer = undefined;
@@ -123,7 +126,8 @@ export function acquireUserBrowser(upstreamUrl: string): void {
 
 /** A session stopped using it; close it once nobody has for a while. */
 export function releaseUserBrowser(upstreamUrl: string): void {
-  const p = pools.get(upstreamUrl);
+  const key = canonicalCdpKey(upstreamUrl);
+  const p = pools.get(key);
   if (!p) {
     return;
   }
@@ -144,8 +148,8 @@ export function releaseUserBrowser(upstreamUrl: string): void {
       void b?.close().catch(() => {});
     }
     p.relay?.close();
-    if (pools.get(upstreamUrl) === p) {
-      pools.delete(upstreamUrl);
+    if (pools.get(key) === p) {
+      pools.delete(key);
     }
   };
   const ms = idleMs();
@@ -159,7 +163,7 @@ export function releaseUserBrowser(upstreamUrl: string): void {
 
 /** Sessions currently using the Chrome at `upstreamUrl` (for tests). */
 export function userCount(upstreamUrl: string): number {
-  return pools.get(upstreamUrl)?.users ?? 0;
+  return pools.get(canonicalCdpKey(upstreamUrl))?.users ?? 0;
 }
 
 /** For tests. */

@@ -77,6 +77,13 @@ clean → close the tabs you opened
 
    **Checking for an open dialog in `playwright_evaluate`:** many confirmations ("Delete post?") are native `<dialog>` elements shown in the top layer, and `offsetParent` is `null` for those even when they are on screen. Look for `dialog[open]`, `:modal` and `[role=dialog]`/`[role=alertdialog]`, and test visibility with `el.checkVisibility()` or a non-zero `getBoundingClientRect()`, never `offsetParent`.
 
+## Attaching to the user's browser
+
+- **Allow is per connection, not remembered.** Chrome's `chrome://inspect` toggle asks the user to click Allow for every new DevTools connection; there is no persistent Allow. Never open your own CDP/WebSocket connection to the browser alongside Squire — do everything through Squire's tools, which share one connection.
+- **A 403 means the prompt was not accepted.** If `create_session` fails with a 403 (or "Chrome refused the CDP connection …"), the user denied or dismissed the prompt, or it is still waiting. Ask them to click Allow in Chrome, then retry once. Do not treat it as the user taking control, and do not loop.
+- **Pick the right profile.** One Chrome can hold several profiles, each with its own logins. Choose by the tabs in `playwright_list_tabs` (for example the one with the user's work email or GitHub), open tabs with `sameProfileAs`, and if unsure ask which profile. A browser that seems "wrong" usually means the wrong profile.
+- **Secrets shown once.** A value read with `playwright_evaluate` normally lands in the transcript. To put a secret shown once (such as an API key in a dialog) into a local file without returning it, pass `saveTo`: the file is written 0600 and only its path comes back. If that path is unavailable, say so; never work around it with a side connection.
+
 ## Step vocabulary for run_script
 
 `fill`, `type`, `click`, `hover`, `select`, `scrollTo`, `press` (with `key`), `reveal` (force-unhide a selector), `wait` (with `ms`, or `waitFor: load|domcontentloaded|networkidle|navigation`), `eval` (with `script`), `upload` (with `files`: absolute paths). Selectors are CSS by default; `xpath=…` and `text=…` prefixes work too.
