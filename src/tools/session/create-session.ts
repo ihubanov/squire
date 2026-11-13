@@ -89,6 +89,13 @@ export interface WebSessionOptions {
   viewport?: { width: number; height: number };
   /** Cookies and localStorage for a launched browser (not used when attached to the user's). */
   storageState?: Awaited<ReturnType<BrowserContext['storageState']>>;
+  /**
+   * A persistent browser profile directory for a launched browser. Cookies,
+   * history and cache live here and survive delete_session, so search
+   * engines and other sites build trust over time. Chromium-family only in
+   * practice (launchPersistentContext is supported by all three engines).
+   */
+  userDataDir?: string;
   /** Called if attaching to the user's Chrome is slow, most likely waiting on its Allow prompt. */
   onWaiting?: (message: string) => void;
   /**
@@ -378,6 +385,8 @@ export async function openWebSession(opts: WebSessionOptions) {
   let browser!: import('playwright').Browser;
   let context!: import('playwright').BrowserContext;
   let page!: import('playwright').Page;
+  // The persistent profile actually opened, if any (for the session reply).
+  let persistentProfile: string | undefined;
   // CDP debug port of a browser we launch ourselves (undefined in
   // CDP-attach mode or when disabled via APPIUM_MCP_CDP_PORT=0).
   let cdpPort: number | undefined;
@@ -573,8 +582,68 @@ export async function openWebSession(opts: WebSessionOptions) {
     // remaining automation fingerprints via an init script.
     // Set APPIUM_MCP_STEALTH=0 to opt back into plain launch.
     const stealth = isChromium && process.env.APPIUM_MCP_STEALTH !== '0';
+    const userDataDir = opts.userDataDir?.trim()
+      ? opts.userDataDir.trim().replace(/^~(?=$|\/)/, process.env.HOME ?? '~')
+      : undefined;
+    persistentProfile = userDataDir;
 
-    if (stealth) {
+    if (userDataDir) {
+      // One long-lived profile: cookies, history and cache persist across
+      // sessions (this is what lets a search engine trust the browser over
+      // time). Playwright's launchPersistentContext owns the browser process,
+      // so `browser` comes from the context rather than launch(). Only one
+      // process may hold a profile's singleton lock at a time.
+      if (opts.storageState) {
+        log.warn(
+          'userDataDir ignores storageState: a persistent profile already holds its own cookies.'
+        );
+      }
+      const contextOpts = {
+        headless,
+        viewport,
+        // No userAgent override — see newContext below.
+        locale: 'en-US',
+        timezoneId: 'Europe/Sofia',
+        ...(isChromium ? { args: detachArgs } : {}),
+      };
+      const persistentOpts = stealth
+        ? {
+            ...contextOpts,
+            args: [
+              '--disable-blink-features=AutomationControlled',
+              '--no-first-run',
+              '--no-default-browser-check',
+              '--disable-infobars',
+              ...detachArgs,
+            ],
+            ignoreDefaultArgs: ['--enable-automation'],
+          }
+        : contextOpts;
+      try {
+        context = await engine.launchPersistentContext(
+          userDataDir,
+          stealth ? { ...persistentOpts, channel: 'chrome' } : persistentOpts
+        );
+        browser = context.browser() as import('playwright').Browser;
+      } catch (e) {
+        if (!stealth) {
+          throw e;
+        }
+        log.warn(
+          `Could not launch system Chrome channel (${(e as Error).message}); falling back to bundled Chromium.`
+        );
+        context = await engine.launchPersistentContext(
+          userDataDir,
+          persistentOpts
+        );
+        browser = context.browser() as import('playwright').Browser;
+      }
+      if (!browser) {
+        throw new Error(
+          `Persistent profile ${userDataDir} opened without a browser handle — close any other browser using it and retry.`
+        );
+      }
+    } else if (stealth) {
       const launchOpts = {
         headless,
         args: [
@@ -605,16 +674,18 @@ export async function openWebSession(opts: WebSessionOptions) {
       });
     }
 
-    context = await browser.newContext({
-      viewport,
-      // No userAgent override: a hardcoded string drifts from the real
-      // Chrome version and desyncs from navigator.userAgentData /
-      // client hints, which is itself a bot signal. The real Chrome
-      // channel already sends a correct, consistent UA.
-      locale: 'en-US',
-      timezoneId: 'Europe/Sofia',
-      ...(opts.storageState ? { storageState: opts.storageState } : {}),
-    });
+    if (!userDataDir) {
+      context = await browser.newContext({
+        viewport,
+        // No userAgent override: a hardcoded string drifts from the real
+        // Chrome version and desyncs from navigator.userAgentData /
+        // client hints, which is itself a bot signal. The real Chrome
+        // channel already sends a correct, consistent UA.
+        locale: 'en-US',
+        timezoneId: 'Europe/Sofia',
+        ...(opts.storageState ? { storageState: opts.storageState } : {}),
+      });
+    }
 
     if (stealth) {
       await context.addInitScript(() => {
@@ -635,7 +706,11 @@ export async function openWebSession(opts: WebSessionOptions) {
       });
     }
 
-    page = await context.newPage();
+    // A persistent context already opens with a blank tab; adopt it rather
+    // than leaving an extra one behind each session.
+    page = userDataDir
+      ? (context.pages()[0] ?? (await context.newPage()))
+      : await context.newPage();
   }
 
   if (initialUrl) {
@@ -721,6 +796,7 @@ export async function openWebSession(opts: WebSessionOptions) {
     viewport,
     initialUrl,
     cdpPort,
+    userDataDir: persistentProfile,
     attachedToUserBrowser,
     attachError,
     attachedInfo,
@@ -807,6 +883,12 @@ export default function createSession(server: any): void {
         .describe(
           'For web platform only: Browser viewport size. Default is 1280x720.'
         ),
+      userDataDir: z
+        .string()
+        .optional()
+        .describe(
+          'For web platform only: a persistent browser profile directory (e.g. ~/.local/share/squire/profile). Cookies, history and cache persist across sessions, which lets search engines and other sites build trust over time. The profile is flushed on delete_session; only one session can use a directory at a time. Ignored when attaching via cdpEndpoint, and storageState is ignored when this is set.'
+        ),
     }),
     annotations: {
       readOnlyHint: false,
@@ -829,6 +911,7 @@ export default function createSession(server: any): void {
             viewport,
             initialUrl,
             cdpPort,
+            userDataDir,
             attachedToUserBrowser,
             attachError,
             attachedInfo,
@@ -838,6 +921,7 @@ export default function createSession(server: any): void {
             url: args.url,
             viewport: args.viewport,
             cdpEndpoint: args.cdpEndpoint,
+            userDataDir: args.userDataDir,
             onWaiting: (m) => _context?.log?.info?.(m),
           });
 
@@ -847,7 +931,7 @@ export default function createSession(server: any): void {
             content: [
               {
                 type: 'text',
-                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? `\nMode: attached to user browser (CDP)${attachedInfo ? `: ${attachedInfo}` : ''}` : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. Fix that, then delete this session and create it again.` : ''}`,
+                text: `WEB session created successfully with ID: ${sessionId}\nPlatform: Web (Playwright)\nBrowser: ${browserType}\nHeadless: ${headless}\nViewport: ${viewport.width}x${viewport.height}${initialUrl ? `\nURL: ${initialUrl}` : ''}${attachedToUserBrowser ? `\nMode: attached to user browser (CDP)${attachedInfo ? `: ${attachedInfo}` : ''}` : `\nMode: detached browser (own process/profile)${cdpPort ? `, CDP on 127.0.0.1:${cdpPort}` : ''}`}${userDataDir ? `\nPersistent profile: ${userDataDir} (cookies and history survive delete_session)` : ''}\nActive sessions: ${totalSessions}${attachError ? `\nWARNING: could not attach to the user's browser at ${process.env.APPIUM_MCP_CDP_ENDPOINT} (${attachError}). This is a separate browser the user is not looking at. Fix that, then delete this session and create it again.` : ''}`,
               },
             ],
           };
