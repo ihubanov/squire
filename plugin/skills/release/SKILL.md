@@ -5,6 +5,8 @@ description: Publish a new Squire version correctly — preflight the tree, tag 
 
 # Cutting a Squire release
 
+Everything here happens on GitHub runners — never run the build, lint, format or test steps on the local machine. Push and read CI (see the `ci` skill).
+
 Publishing is driven entirely by the `Release` GitHub workflow, which fires on any `v*` tag pushed to `fork`. The authoritative version lives in `package.json`; `server.json` is synced from it by the `version` hook.
 
 npm authenticates that workflow through its **Trusted Publisher (OIDC)** setting for `@sniffski/squire` — there is no `NPM_TOKEN` secret and no 2FA prompt. **Never ask the user to `npm login` or re-auth before a release.** A local `npm whoami` returning `E401` is expected and irrelevant: the publish happens on the runner, not on this machine. The registry is only useful locally for read-back verification (`npm view`).
@@ -28,6 +30,8 @@ node -p "require('./.claude-plugin/marketplace.json').plugins.find(p=>p.name==='
 ```
 
 Both must be equal and both must have been bumped for a plugin change. Bump them in the same commit as the release. `claude plugin tag <path> --dry-run` performs exactly this check (and refuses a mismatch) if you want the tool to confirm it.
+
+`src/tests/release-pins.test.ts` fails `npm test` when the plugin pin, the two plugin versions, `server.json` or the README's pinned launch commands drift from `package.json`. Update those in the same commit; the release workflow runs the tests before publishing.
 
 Then check the tag itself:
 

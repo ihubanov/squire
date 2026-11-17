@@ -10,10 +10,11 @@ import {
 import { runWithConnection } from './connection-context.js';
 import { killOwnedBrowsers } from './browser-cleanup.js';
 import log from './logger.js';
+import { CURRENT_VERSION } from './doctor.js';
 
 const server = new FastMCP({
-  name: 'MCP Appium',
-  version: '1.0.0',
+  name: 'Squire',
+  version: CURRENT_VERSION as `${number}.${number}.${number}`,
   instructions:
     'Intelligent MCP server providing AI assistants with powerful tools and resources for Appium mobile automation and Playwright web browser automation',
 });

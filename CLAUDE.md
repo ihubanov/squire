@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+## Build, lint, format and test — GitHub Actions only
+
+The local machine is **not** a build box. Never run `npm install`, `npm ci`, `npm run build`, `npm run lint`, `npm run format:check`, `npm run test`, `npx tsc`, `npx prettier` or `npx eslint` here.
+
+Push to `fork` and let the runners do it: `.github/workflows/ci.yml` on push/PR to `main`, `.github/workflows/publish.yml` on a `v*` tag. Watch with `gh run watch`, read failures with `gh run view <id> --log-failed`, then fix and push again. Full procedure: `plugin/skills/ci/SKILL.md`; release flow: `plugin/skills/release/SKILL.md`.
+
 ## SAGE — Persistent Memory
 
 You have persistent institutional memory via SAGE MCP.

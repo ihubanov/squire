@@ -1,8 +1,8 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.ihubanov/squire",
-  "title": "MCP Appium - Mobile Development and Automation Server",
-  "description": "MCP server for Appium mobile automation on iOS and Android devices with test creation tools.",
+  "title": "Squire - Browser and Mobile Automation over MCP",
+  "description": "Squire gives AI agents hands on real browsers and phones: Playwright web automation, on-screen guided tours, and Appium mobile tools. Not affiliated with Appium.",
   "version": "1.34.13",
   "packages": [
     {

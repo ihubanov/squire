@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
-import server from './server.js';
 import log from './logger.js';
+import { runDoctor, CURRENT_VERSION } from './doctor.js';
+import { refuseIfDuplicateSquireServer } from './duplicate-guard.js';
 
 // Playwright and the CDP relay throw from inside event handlers when a
 // browser sends something the bundled Playwright build does not expect (e.g.
@@ -24,7 +25,11 @@ const port =
   args.find((arg) => arg.startsWith('--port='))?.split('=')[1] || '8080';
 
 async function startServer(): Promise<void> {
-  log.info('Starting MCP Appium MCP Server...');
+  // Load the server and its heavy dependencies only when actually serving;
+  // `squire doctor` and `--version` must stay fast and quiet.
+  const { default: server } = await import('./server.js');
+
+  log.info(`Starting Squire ${CURRENT_VERSION} MCP Server...`);
 
   try {
     if (useHttpStream) {
@@ -58,5 +63,24 @@ async function startServer(): Promise<void> {
   }
 }
 
-// Start the server
-startServer();
+async function main(): Promise<void> {
+  // `squire --version` proves which pinned release answers, without starting
+  // a server that then waits on stdio.
+  if (args.includes('--version') || args.includes('-v')) {
+    console.log(CURRENT_VERSION);
+    process.exit(0);
+  }
+
+  // `squire doctor` is a human CLI, not an MCP server: report and exit.
+  if (args[0] === 'doctor') {
+    process.exit(await runDoctor());
+  }
+
+  // The plugin and a hand-written `.mcp.json` entry would otherwise load two
+  // servers, with every tool twice. Keep one per client session.
+  refuseIfDuplicateSquireServer();
+
+  await startServer();
+}
+
+void main();

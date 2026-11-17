@@ -5,8 +5,9 @@
 # Browsers Squire launches carry SQUIRE_OWNED_BROWSER=1 and the pid of the
 # server that started them (SQUIRE_OWNER_PID). That marker survives the
 # server, which is what makes an out-of-process hook able to find leftovers
-# regardless of how Squire was installed (`npx @sniffski/squire` has a
-# different argv from the systemd backend).
+# regardless of how Squire was installed (`npx @sniffski/squire@<pinned>`
+# runs `node .../.bin/squire`, a different argv from the systemd backend's
+# `node .../dist/index.js`).
 #
 # Two steps, both safe for other sessions:
 #   1. Signal live Squire servers with SIGUSR2: reap sessions idle for
@@ -27,7 +28,7 @@ cat >/dev/null 2>&1 || true
 
 squire_server() {
   case "$1" in
-    *@sniffski/squire/dist/index.js* | *appium-mcp/dist/index.js*) return 0 ;;
+    *node_modules/.bin/squire* | *@sniffski/squire/dist/index.js* | *appium-mcp/dist/index.js*) return 0 ;;
   esac
   return 1
 }
@@ -35,9 +36,12 @@ squire_server() {
 # 1. Signal live servers: the idle reaper is server-defined and never kills an
 # active session. Covers the shared httpStream backend and stdio children.
 # One grep finds candidates; tr runs only on those, keeping the scan fast.
-for cmdline_file in $(grep -al 'dist/index.js' /proc/[0-9]*/cmdline 2>/dev/null); do
+for cmdline_file in $(grep -alE 'dist/index\.js|node_modules/\.bin/squire' /proc/[0-9]*/cmdline 2>/dev/null); do
   cmd=$(tr '\0' ' ' <"$cmdline_file" 2>/dev/null) || continue
   squire_server "$cmd" || continue
+  case " $cmd " in
+    *" doctor "*) continue ;;
+  esac
   pid=${cmdline_file#/proc/}
   pid=${pid%/cmdline}
   kill -USR2 "$pid" 2>/dev/null || true
