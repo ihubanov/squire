@@ -26,7 +26,9 @@ function pageOf(
       frames.map((f) => ({
         url: () => f.url,
         content: async () => {
-          if (f.throws) throw new Error('frame detached');
+          if (f.throws) {
+            throw new Error('frame detached');
+          }
           return f.html ?? '';
         },
       })),
