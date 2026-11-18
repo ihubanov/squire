@@ -59,21 +59,32 @@ jobs:
       # then clash, so install and build with Node 22's own npm.
       - run: npm install -g npm@latest
       - run: npm publish --access public --ignore-scripts
-      # The sync step above may have moved the plugin pin/version and
-      # server.json on the runner. Record that on main so the marketplace and
-      # the repo agree with the tarball that was just published. Runs after a
-      # successful publish, so main never advertises an unpublished pin.
+      # main must only ever pin a version npm can actually resolve. The
+      # release commit reaches main from this job, never from a pre-publish
+      # push, so wait for the registry to see the tarball first.
+      - name: Published version must resolve on npm
+        run: |
+          v=$(node -p "require('./package.json').version")
+          for i in $(seq 1 60); do
+            if npm view "@sniffski/squire@$v" version >/dev/null 2>&1; then
+              echo "@sniffski/squire@$v resolves on npm"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::@sniffski/squire@$v is not resolvable on npm; refusing to move main"
+          exit 1
+      # Only now record the release commit on main. Push even when the tag
+      # already carried synced pins, so a tag-first release still lands.
       - name: Commit synced pins to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server.json plugin/.mcp.json plugin/.claude-plugin/plugin.json .claude-plugin/marketplace.json
-          if git diff --cached --quiet; then
-            echo "Pins already current on ${GITHUB_REF_NAME}; nothing to commit."
-            exit 0
-          fi
           v=${GITHUB_REF_NAME#v}
-          git commit -m "chore(release): sync plugin pins ${v} [skip ci]"
+          git add server.json plugin/.mcp.json plugin/.claude-plugin/plugin.json .claude-plugin/marketplace.json README.md docs plugin examples scripts
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): sync plugin pins ${v} [skip ci]"
+          fi
           git fetch origin main
           git rebase origin/main
           git push origin HEAD:main

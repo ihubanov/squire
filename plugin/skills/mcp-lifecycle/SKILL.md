@@ -25,7 +25,7 @@ before any Squire code runs. npx does not validate the cache, so nothing recover
 
 **Healing, in three layers:**
 
-1. `plugin/bin/squire-mcp.mjs` scans `_npx/*` before launching. It removes a directory only when it holds `@sniffski/squire` (or `appium-mcp`) under `node_modules` **and** has no usable root `package.json`. Directories touched within the last 10s are left alone (a concurrent install looks the same). If npx still fails early with a `package.json`/ENOENT error and produced no stdout, the shim repairs again and retries once.
+1. `plugin/bin/squire-mcp.mjs` scans `_npx/*` before launching. It removes a directory only when it holds `@sniffski/squire` (or `appium-mcp`) under `node_modules` **and** has no usable root `package.json`. Directories touched within the last 10s are left alone (a concurrent install looks the same). If npx still fails early with a `package.json`/ENOENT error and produced no stdout, the shim repairs again and retries once. If npx instead reports the pinned version itself is missing (`ETARGET`, `E404`, "No matching version"), the shim retries once as `@sniffski/squire@latest` and logs the substitution — a pin pushed before its release published still yields a working server.
 2. A running server repairs sibling broken entries at startup (`src/index.ts`), so a manual-install user who launches successfully also repairs the cache for the next launch.
 3. `squire doctor --fix` removes them on demand.
 
@@ -62,7 +62,9 @@ Detection reads `/proc`, so server listing is Linux-only and empty elsewhere. Ca
 
 1. Bump `package.json` with `npm version <x.y.z>` (or edit it and run `node scripts/sync-version.mjs`). This rewrites `server.json`, `plugin/.mcp.json` (pin + shim), and bumps the plugin patch version in `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. Idempotent.
 2. `node scripts/verify-pins.mjs` must pass. It checks the shim launch, the exact pin, plugin/marketplace version agreement, `server.json`, and every pinned mention in README/docs/plugin/examples/scripts.
-3. Tag and push to `fork` (see the `release` skill). `.github/workflows/publish.yml` runs sync + verify before publishing, then commits any synced pin files to `main` after a successful publish. `.github/workflows/ci.yml` runs verify on every push/PR, and `npm test` also runs `src/tests/release-pins.test.ts`.
+3. Tag and push **the tag only** to `fork` (see the `release` skill). `.github/workflows/publish.yml` runs sync + verify before publishing, waits for the new version to resolve on npm, then fast-forwards `main` to the tag commit — so `main` never pins an unpublished version. `.github/workflows/ci.yml` runs verify on every push/PR, refuses a pin that is not on npm, and `npm test` also runs `src/tests/release-pins.test.ts`.
 4. After the release: `npm view @sniffski/squire dist-tags` shows the new `latest`; `/plugin marketplace update squire` (or autoUpdate) pulls the new plugin version and pin; restart the session; `squire doctor` shows only the new version.
 
 Never publish with a stale pin, and never tell a user to launch the package without an exact `@x.y.z` spec after the name.
+
+**The pin reaches `main` only after `npm publish` succeeds.** A tag-first release pushes the tag alone; the Release workflow waits for `npm view @sniffski/squire@<new>` to resolve, then fast-forwards `main`. Pushing a version bump to `main` before its tag publishes advertises an unpublishable pin and disconnects every plugin user. `ci.yml` refuses a `main` pin that is not on npm, and the launcher falls back to `latest`, but neither is a substitute for the ordering.

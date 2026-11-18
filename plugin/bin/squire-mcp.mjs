@@ -177,6 +177,19 @@ export function looksLikeCorruptCache(stderr) {
   );
 }
 
+/**
+ * The pinned version does not exist on the registry. This is what a plugin
+ * that advertises a pin before its release publishes looks like to a user;
+ * npx must not leave them with a dead server over it.
+ */
+export function looksLikeUnavailableVersion(stderr) {
+  return (
+    /(ETARGET|E404|ENOVERSIONS)/i.test(stderr) ||
+    /No matching version/i.test(stderr) ||
+    /404 (?:Not Found|no such package)/i.test(stderr)
+  );
+}
+
 function runNpx(spec, extraArgs) {
   return new Promise((resolve) => {
     const started = Date.now();
@@ -276,13 +289,12 @@ async function main() {
   }
 
   let result = await runNpx(spec, extraArgs);
-  const earlyFailure =
+  const failedEarly =
     result.code !== 0 &&
     result.stdoutBytes === 0 &&
-    result.elapsedMs < EARLY_EXIT_MS &&
-    looksLikeCorruptCache(result.stderrTail);
+    result.elapsedMs < EARLY_EXIT_MS;
 
-  if (earlyFailure) {
+  if (failedEarly && looksLikeCorruptCache(result.stderrTail)) {
     // The failure itself proves this entry is not an in-flight install, so
     // the age guard does not apply on the retry.
     const repaired = repairNpxCache({ minAgeMs: 0 });
@@ -295,6 +307,15 @@ async function main() {
       console.error('squire-mcp: repaired the npx cache; retrying once...');
       result = await runNpx(spec, extraArgs);
     }
+  } else if (failedEarly && looksLikeUnavailableVersion(result.stderrTail)) {
+    // A pin can reach this launcher before its release is on npm (a tag-first
+    // release, or a client that updated mid-publish). Never leave the user
+    // with a dead server: fall back to the moving latest tag once.
+    console.error(
+      `squire-mcp: ${spec} is not available on npm; ` +
+        'falling back to @sniffski/squire@latest'
+    );
+    result = await runNpx('@sniffski/squire@latest', extraArgs);
   }
 
   if (result.signal) {

@@ -69,6 +69,11 @@ function fixture(): Fixture {
       '  network)',
       '    echo "npm error network request to https://registry.npmjs.org failed" >&2',
       '    exit 1 ;;',
+      '  unavailable)',
+      `    case "$*" in`,
+      `      *"${spec}"*) echo "npm error code ETARGET" >&2; echo "npm error notarget No matching version found for ${spec}." >&2; exit 1 ;;`,
+      '      *) echo 1.34.16; exit 0 ;;',
+      '    esac ;;',
       '  *)',
       '    echo 1.34.14',
       '    exit 0 ;;',
@@ -160,6 +165,27 @@ describe('squire-mcp launcher', () => {
       // (a concurrent install could look the same), and a network error is
       // not the cache-corruption signature that triggers the retry.
       expect(npxCalls(f.log)).toHaveLength(1);
+    },
+    15_000
+  );
+
+  posixTest(
+    'falls back to latest when the pinned version is not on npm',
+    async () => {
+      const f = fixture();
+      rmSync(f.brokenDir, { recursive: true, force: true });
+      f.env.FAKE_NPX_MODE = 'unavailable';
+      const result = await runShim(f.env);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('1.34.16');
+      expect(result.stderr).toContain(
+        'falling back to @sniffski/squire@latest'
+      );
+      const calls = npxCalls(f.log);
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toContain(spec);
+      expect(calls[1]).toContain('@sniffski/squire@latest');
     },
     15_000
   );

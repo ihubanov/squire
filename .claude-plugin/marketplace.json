@@ -9,7 +9,7 @@
       "name": "squire",
       "source": "./plugin",
       "description": "Squire — desktop/browser automation that drives a real browser like a human, alongside you. Web-driving, captcha-dial, presenting, android-driving, ci and mcp-lifecycle skills, browser-driver + presenter subagents, a browser-close cleanup hook, and a self-healing MCP launcher. Pairs with the squire MCP server (mcp__plugin_squire_squire__*). Not affiliated with Appium.",
-      "version": "0.9.14"
+      "version": "0.9.15"
     }
   ]
 }

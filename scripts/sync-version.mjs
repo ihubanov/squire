@@ -17,7 +17,13 @@
  * configuration changes (the pin moves every release), so
  * `/plugin marketplace update squire` always sees a new version.
  */
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -110,8 +116,56 @@ if (entry.version !== plugin.version) {
   changed.push('.claude-plugin/marketplace.json');
 }
 
+// 5. Published text: every explicit pin moves with the release, so the
+//    post-publish pin commit also fixes README, docs and skill examples.
+const explicitPin = /@sniffski\/squire@\d+\.\d+\.\d+/g;
+for (const file of publishedFiles()) {
+  let text;
+  try {
+    text = readFileSync(at(file), 'utf8');
+  } catch {
+    continue;
+  }
+  const next = text.replace(explicitPin, spec);
+  if (next !== text) {
+    writeFileSync(at(file), next);
+    changed.push(file);
+  }
+}
+
 if (changed.length === 0) {
   console.log(`✓ Pins already at ${version}; nothing to sync`);
 } else {
   console.log(`✓ Synced ${version}: ${changed.join(', ')}`);
+}
+
+/** Every file verify-pins.mjs scans for pinned launch commands. */
+function publishedFiles() {
+  return [
+    'README.md',
+    ...walk('docs'),
+    ...walk('plugin'),
+    ...walk('examples'),
+    ...walk('scripts'),
+  ];
+}
+
+function walk(relative) {
+  let stat;
+  try {
+    stat = statSync(at(relative));
+  } catch {
+    return [];
+  }
+  if (stat.isFile()) {
+    return [relative];
+  }
+  const files = [];
+  for (const entryName of readdirSync(at(relative))) {
+    if (entryName === 'node_modules' || entryName.startsWith('.')) {
+      continue;
+    }
+    files.push(...walk(join(relative, entryName)));
+  }
+  return files;
 }

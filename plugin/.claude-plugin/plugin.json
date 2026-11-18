@@ -1,7 +1,7 @@
 {
   "name": "squire",
   "description": "Squire: your second pair of hands in the browser and on Android. Bundles the web-driving, captcha-dial, presenting, android-driving, ci and mcp-lifecycle skills, the browser-driver and presenter subagents, a browser-close cleanup hook, and a self-healing MCP launcher for the squire MCP server (tools exposed as mcp__plugin_squire_squire__*). Not affiliated with Appium.",
-  "version": "0.9.14",
+  "version": "0.9.15",
   "author": {
     "name": "ihubanov"
   }

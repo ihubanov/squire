@@ -5,7 +5,7 @@ description: Publish a new Squire version correctly — preflight the tree, tag 
 
 # Cutting a Squire release
 
-Everything here happens on GitHub runners — never run the build, lint, format or test steps on the local machine. Push and read CI (see the `ci` skill).
+Everything here happens on GitHub runners — never run the build, lint, format or test steps on the local machine. Push and read CI (see the `ci` skill). The Release workflow runs the **full** `npm test` before `npm publish`, so a red suite blocks the release; do not tag until a CI run of the same tree is green. Never substitute a targeted test run — a targeted pass is how a red release once shipped.
 
 Publishing is driven entirely by the `Release` GitHub workflow, which fires on any `v*` tag pushed to `fork`. The authoritative version lives in `package.json`; `server.json` is synced from it by the `version` hook.
 
@@ -33,6 +33,18 @@ Both must be equal and both must have been bumped for a plugin change. `node scr
 
 `node scripts/verify-pins.mjs` is the gate: it fails when the plugin pin, the two plugin versions, `server.json`, the launcher wiring or the README/docs pinned launch commands drift from `package.json`. CI and the Release workflow run it; `src/tests/release-pins.test.ts` mirrors it in `npm test`. The Release workflow also runs the sync step and pushes any resulting pin commit to `main` after a successful publish, so a forgotten pin file cannot survive a release. The launch path itself (the cache-repairing shim) is documented in the `mcp-lifecycle` skill.
 
+## Never push the bump to main before the tag publishes
+
+The release commit moves `package.json` and the plugin pin to a version that does **not exist on npm yet**. If that commit reaches `main` first, every `/plugin update` installs a pin that cannot resolve — a dead MCP for every user. `main` must only ever advertise a version npm can resolve.
+
+So commit locally, tag it, and push **only the tag**:
+
+```sh
+git push fork vX.Y.Z     # not `git push fork main`
+```
+
+The Release workflow publishes, waits until `npm view @sniffski/squire@X.Y.Z` resolves, then fast-forwards `main` to the tag commit and pushes it. `ci.yml` also refuses a `main` pin that is not on npm, as a backstop against a hand-pushed bump. If the workflow fails before publishing, `main` still points at the last published, working pin.
+
 Then check the tag itself:
 
 ```sh
@@ -50,7 +62,7 @@ The workflow's first step is `Tag must match package.json`; a red run there mean
 
 ```sh
 git tag -a vX.Y.Z -F - <<<'<one-line summary>'
-git push fork vX.Y.Z
+git push fork vX.Y.Z          # tag only; the workflow moves main after publish
 ```
 
 A tag ruleset governs `v*`; branch/fork admins carry a bypass so a corrected re-point is allowed. Non-admins need the ruleset lifted first.

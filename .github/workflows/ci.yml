@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The Release workflow pushes the post-publish pin commit with the
+  # repository token, which does not trigger `push`; dispatch this workflow
+  # after a release to verify main explicitly.
+  workflow_dispatch:
 
 jobs:
   lint-format-and-test:
@@ -27,6 +31,26 @@ jobs:
       # the launcher (which repairs a corrupt npx cache) is wired up.
       - name: Verify release pins
         run: node scripts/verify-pins.mjs
+
+      # A pin that is not on npm yet makes every plugin install a dead MCP.
+      # verify-pins.mjs cannot know the registry, so check it here. The
+      # Release workflow only moves main after this resolves, which leaves
+      # this guard to catch a hand-pushed pre-release version bump. Release
+      # branches legitimately carry the bump before publish, so restrict the
+      # check to main.
+      - name: Pinned server version must be published
+        if: github.ref == 'refs/heads/main'
+        run: |
+          v=$(node -p "require('./package.json').version")
+          for i in $(seq 1 12); do
+            if npm view "@sniffski/squire@$v" version >/dev/null 2>&1; then
+              echo "@sniffski/squire@$v is published"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::main pins @sniffski/squire@$v, which is not on npm; never push a release bump before its tag publishes"
+          exit 1
 
       - uses: SocketDev/action@v1
         with:
