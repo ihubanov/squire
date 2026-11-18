@@ -191,8 +191,15 @@ export interface RepairOptions extends ScanOptions {
 /** Broken Squire cache directories, optionally ignoring very fresh ones. */
 export function findBrokenSquireCaches(options: RepairOptions = {}): string[] {
   const minAgeMs = options.minAgeMs ?? 10_000;
-  return scanNpxCache(options)
-    .filter((entry) => !entry.complete)
+  const broken = scanNpxCache(options).filter((entry) => !entry.complete);
+  // `minAgeMs: 0` means "no age guard", not "compare against a zero clock".
+  // `mtimeMs` carries sub-millisecond precision while `Date.now()` truncates
+  // to whole milliseconds, so a directory created moments ago can report an
+  // age of -0.7 ms and would be dropped by a naive `>= 0` comparison.
+  if (minAgeMs <= 0) {
+    return broken.map((entry) => entry.dir);
+  }
+  return broken
     .filter((entry) => directoryAgeMs(entry.dir) >= minAgeMs)
     .map((entry) => entry.dir);
 }

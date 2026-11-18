@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -169,6 +170,18 @@ describe('repairNpxCache', () => {
     install(root, 'broken', { rootManifest: false });
     expect(repairNpxCache({ cacheRoot: root, minAgeMs: 0 })).toHaveLength(1);
     expect(repairNpxCache({ cacheRoot: root, minAgeMs: 0 })).toEqual([]);
+  });
+
+  test('minAgeMs: 0 ignores clock skew on a fresh directory', () => {
+    // mtimeMs is fractional while Date.now() truncates to whole ms, so a
+    // directory created this instant can report a negative age. A zero guard
+    // here means "no age filter", not "age >= 0".
+    const root = cacheRoot();
+    const broken = install(root, 'skewed', { rootManifest: false });
+    const ahead = new Date(Date.now() + 5_000);
+    utimesSync(broken, ahead, ahead);
+
+    expect(repairNpxCache({ cacheRoot: root, minAgeMs: 0 })).toEqual([broken]);
   });
 
   test('also recognises the appium-mcp package name', () => {
