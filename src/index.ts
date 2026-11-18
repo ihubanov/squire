@@ -3,6 +3,7 @@
 import log from './logger.js';
 import { runDoctor, CURRENT_VERSION } from './doctor.js';
 import { refuseIfDuplicateSquireServer } from './duplicate-guard.js';
+import { repairNpxCache } from './npx-cache.js';
 
 // Playwright and the CDP relay throw from inside event handlers when a
 // browser sends something the bundled Playwright build does not expect (e.g.
@@ -73,7 +74,25 @@ async function main(): Promise<void> {
 
   // `squire doctor` is a human CLI, not an MCP server: report and exit.
   if (args[0] === 'doctor') {
-    process.exit(await runDoctor());
+    process.exit(await runDoctor({ fix: args.includes('--fix') }));
+  }
+
+  // Self-heal the npx cache this process was launched from. A launch that
+  // reached us proves this spec's install is usable, but an interrupted
+  // sibling install in `_npx/` would kill its own next launch with ENOENT
+  // before any code runs. Removing only structurally-broken Squire entries
+  // is safe; the age guard inside skips a concurrent install.
+  try {
+    const repaired = repairNpxCache();
+    if (repaired.length > 0) {
+      log.warn(
+        `Repaired ${repaired.length} corrupt npx cache install(s): ` +
+          repaired.join(', ')
+      );
+    }
+  } catch (error) {
+    // Best-effort: never let cache housekeeping block the server.
+    log.warn('npx cache check failed (continuing):', error);
   }
 
   // The plugin and a hand-written `.mcp.json` entry would otherwise load two

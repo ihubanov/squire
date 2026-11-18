@@ -1,7 +1,7 @@
 {
   "name": "@sniffski/squire",
   "mcpName": "io.github.ihubanov/squire",
-  "version": "1.34.14",
+  "version": "1.34.15",
   "type": "module",
   "repository": {
     "type": "git",
@@ -34,6 +34,7 @@
     "index-docs": "node dist/scripts/simple-index-documentation.js",
     "query-docs": "node dist/scripts/simple-query-documentation.js",
     "sync-version": "node scripts/sync-version.mjs",
+    "verify-pins": "node scripts/verify-pins.mjs",
     "version": "npm run sync-version",
     "prepack": "npm run build"
   },

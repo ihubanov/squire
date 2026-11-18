@@ -108,6 +108,60 @@ export interface DuplicateServer {
   older: SquireProcess;
 }
 
+export interface DuplicateGroup {
+  /** Client session (process group) that owns the servers. */
+  pgid: number;
+  /** Same group, oldest first; `servers[0]` is the survivor. */
+  servers: SquireProcess[];
+  /** Every server except the oldest; these are the duplicates. */
+  surplus: SquireProcess[];
+}
+
+/** Group servers by client session, oldest first, keeping only duplicates. */
+export function duplicateGroups(servers: SquireProcess[]): DuplicateGroup[] {
+  const byGroup = new Map<number, SquireProcess[]>();
+  for (const server of servers) {
+    byGroup.set(server.pgid, [...(byGroup.get(server.pgid) ?? []), server]);
+  }
+  const groups: DuplicateGroup[] = [];
+  for (const [pgid, groupServers] of byGroup) {
+    if (groupServers.length < 2) {
+      continue;
+    }
+    groupServers.sort((a, b) =>
+      a.startTime !== b.startTime ? a.startTime - b.startTime : a.pid - b.pid
+    );
+    groups.push({
+      pgid,
+      servers: groupServers,
+      surplus: groupServers.slice(1),
+    });
+  }
+  return groups;
+}
+
+/**
+ * `squire doctor --fix`: stop the duplicate servers in each group, keeping
+ * the oldest. Single servers are never touched, even when they are stale —
+ * they may be a live session that would lose its browser.
+ */
+export function terminateDuplicateServers(
+  servers: SquireProcess[] = listSquireServers()
+): number[] {
+  const pids: number[] = [];
+  for (const group of duplicateGroups(servers)) {
+    for (const server of group.surplus) {
+      try {
+        process.kill(server.pid, 'SIGTERM');
+        pids.push(server.pid);
+      } catch {
+        // Already gone or not ours to signal; the report shows it either way.
+      }
+    }
+  }
+  return pids;
+}
+
 /** True if `self` should lose the race for its process group. */
 function losesTo(self: SquireProcess, other: SquireProcess): boolean {
   if (other.startTime !== self.startTime) {

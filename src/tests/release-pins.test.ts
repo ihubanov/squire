@@ -24,8 +24,20 @@ const serverJson = json('server.json');
 
 describe('release pins', () => {
   test('plugin .mcp.json pins the package version', () => {
-    const pin = json('plugin/.mcp.json').mcpServers.squire.args[1];
-    expect(pin).toBe(`@sniffski/squire@${pkg.version}`);
+    const server = json('plugin/.mcp.json').mcpServers.squire;
+    const pins = (server.args as string[]).filter((arg) =>
+      arg.startsWith('@sniffski/squire@')
+    );
+    expect(pins).toEqual([`@sniffski/squire@${pkg.version}`]);
+  });
+
+  test('the plugin launches through the cache-repairing shim', () => {
+    // A bare `npx -y @sniffski/squire@<pin>` dies with ENOENT when the npx
+    // cache is half-installed; the shim repairs it and retries.
+    const server = json('plugin/.mcp.json').mcpServers.squire;
+    expect(server.command).toBe('node');
+    expect(server.args[0]).toMatch(/\/bin\/squire-mcp\.mjs$/);
+    expect(read('plugin/bin/squire-mcp.mjs').length).toBeGreaterThan(0);
   });
 
   test('plugin.json and the marketplace entry agree', () => {

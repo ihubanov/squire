@@ -18,6 +18,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
+          # The pin-sync commit is rebased onto main before it is pushed.
+          fetch-depth: 0
       - name: Setup submodules sparse-checkout
         run: |
           chmod +x scripts/setup-submodules-sparse.sh
@@ -30,13 +32,14 @@ jobs:
         run: |
           v=$(node -p "require('./package.json').version")
           [ "v$v" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME but package.json is $v"; exit 1; }
-      # The plugin launches its MCP server as `npx @sniffski/squire@<pinned>`;
-      # publishing with a stale pin ships the old server to plugin users.
-      - name: Plugin MCP pin must match package.json
-        run: |
-          v=$(node -p "require('./package.json').version")
-          pin=$(node -p "require('./plugin/.mcp.json').mcpServers.squire.args[1]")
-          [ "$pin" = "@sniffski/squire@$v" ] || { echo "plugin/.mcp.json pins $pin but package.json is $v"; exit 1; }
+      # Move the plugin pin, plugin version and server.json onto package.json's
+      # version, then refuse to publish if any released artifact still
+      # disagrees. This is what makes `/plugin update squire` yield the newest
+      # MCP without a maintainer remembering every file.
+      - name: Sync release pins
+        run: node scripts/sync-version.mjs
+      - name: Verify release pins
+        run: node scripts/verify-pins.mjs
       - run: npm install
       - run: npm run build
       # The web tests drive a real Chromium. --with-deps runs apt, and the
@@ -56,6 +59,24 @@ jobs:
       # then clash, so install and build with Node 22's own npm.
       - run: npm install -g npm@latest
       - run: npm publish --access public --ignore-scripts
+      # The sync step above may have moved the plugin pin/version and
+      # server.json on the runner. Record that on main so the marketplace and
+      # the repo agree with the tarball that was just published. Runs after a
+      # successful publish, so main never advertises an unpublished pin.
+      - name: Commit synced pins to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server.json plugin/.mcp.json plugin/.claude-plugin/plugin.json .claude-plugin/marketplace.json
+          if git diff --cached --quiet; then
+            echo "Pins already current on ${GITHUB_REF_NAME}; nothing to commit."
+            exit 0
+          fi
+          v=${GITHUB_REF_NAME#v}
+          git commit -m "chore(release): sync plugin pins ${v} [skip ci]"
+          git fetch origin main
+          git rebase origin/main
+          git push origin HEAD:main
       - name: GitHub release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env:

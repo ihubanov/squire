@@ -1,10 +1,10 @@
 {
   "mcpServers": {
     "squire": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "@sniffski/squire@1.34.14"
+        "${CLAUDE_PLUGIN_ROOT}/bin/squire-mcp.mjs",
+        "@sniffski/squire@1.34.15"
       ],
       "env": {
         "NODE_ENV": "production",

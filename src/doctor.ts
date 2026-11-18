@@ -2,22 +2,32 @@
  * `squire doctor` — report Squire servers and npx installs on this machine,
  * and flag the ones that are not this version.
  *
- * Read-only. It never kills a process and never deletes a cache directory:
- * a server may belong to a live session that is still working, and npx
- * reuses cached versions without cost. The report exists so the stale
- * leftovers are visible instead of silently answering tool calls.
+ * Read-only by default: it never kills a process and never deletes a cache
+ * directory, because a server may belong to a live session that is still
+ * working. `squire doctor --fix` is the explicit opt-in: it removes corrupt
+ * npx cache entries (so the next launch can reinstall) and stops duplicate
+ * servers, keeping the oldest in each client session. It still never touches
+ * a single stale server — that session's browser would vanish mid-task; it
+ * reports it so the client can be restarted instead.
  */
-import { readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { listSquireServers, type SquireProcess } from './duplicate-guard.js';
+import {
+  listSquireServers,
+  duplicateGroups,
+  terminateDuplicateServers,
+  type SquireProcess,
+} from './duplicate-guard.js';
+import {
+  findBrokenSquireCaches,
+  repairNpxCache,
+  scanNpxCache as scanCacheEntries,
+} from './npx-cache.js';
 
 // FastMCP types its version as a semver template literal, so keep that shape.
 export const CURRENT_VERSION = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf8')
 ).version as `${number}.${number}.${number}`;
-
-const PACKAGE_DIRS = ['@sniffski/squire', 'appium-mcp'];
 
 /** The JS file a server process is running, if it can be identified. */
 export function serverScript(argv: string[]): string | undefined {
@@ -53,88 +63,58 @@ export interface CachedInstall {
 
 /** Squire copies in the npx cache (`~/.npm/_npx/<hash>/node_modules/...`). */
 export function scanNpxCache(): CachedInstall[] {
-  const cache = process.env.npm_config_cache || join(homedir(), '.npm');
-  const npxRoot = join(cache, '_npx');
-  let entries: string[];
-  try {
-    entries = readdirSync(npxRoot);
-  } catch {
-    return [];
-  }
-  const installs: CachedInstall[] = [];
-  for (const entry of entries) {
-    const dir = join(npxRoot, entry);
-    for (const name of PACKAGE_DIRS) {
-      try {
-        const pkg = JSON.parse(
-          readFileSync(join(dir, 'node_modules', name, 'package.json'), 'utf8')
-        );
-        if (typeof pkg.version === 'string') {
-          installs.push({ version: pkg.version, dir });
-        }
-      } catch {
-        // Not an install of this package.
-      }
-    }
-  }
-  return installs;
+  return scanCacheEntries()
+    .filter(
+      (entry): entry is typeof entry & { version: string } =>
+        entry.version !== null
+    )
+    .map((entry) => ({ version: entry.version, dir: entry.dir }));
 }
 
-function describeServer(
-  server: SquireProcess,
-  current: string
-): { line: string; stale: boolean } {
+function serverVersion(server: SquireProcess): string | null {
   const script = serverScript(server.argv);
-  const version = script ? versionForScript(script) : null;
-  const label = version ? `v${version}` : 'unknown';
-  const stale = version !== current;
-  return {
-    line: `  pid ${server.pid}  ${label.padEnd(12)} ${stale ? 'STALE' : 'ok'}`,
-    stale,
-  };
+  return script ? versionForScript(script) : null;
 }
 
-/** Print the report and return the process exit code (1 if anything stale). */
-export async function runDoctor(): Promise<number> {
+/**
+ * Print the report and return the process exit code (1 if anything still
+ * needs an operator after any requested fix).
+ */
+export async function runDoctor(
+  options: { fix?: boolean } = {}
+): Promise<number> {
   const current = CURRENT_VERSION;
+  const fix = options.fix === true;
   const servers = listSquireServers();
+  const brokenCaches = findBrokenSquireCaches({ minAgeMs: 0 });
+  const duplicate = duplicateGroups(servers);
 
-  console.log(`Squire doctor`);
+  console.log(`Squire doctor${fix ? ' --fix' : ''}`);
   console.log(`  this CLI: v${current} (${process.platform})`);
   console.log('');
 
-  let problems = 0;
   if (servers.length === 0) {
     console.log('Running Squire servers: none');
   } else {
     console.log(`Running Squire servers: ${servers.length}`);
     for (const server of servers) {
-      const { line, stale } = describeServer(server, current);
-      console.log(line);
-      if (stale) {
-        problems++;
-      }
+      const version = serverVersion(server);
+      const label = version ? `v${version}` : 'unknown';
+      const stale = version !== current;
+      console.log(
+        `  pid ${server.pid}  ${label.padEnd(12)} ${stale ? 'STALE' : 'ok'}`
+      );
     }
-    const byGroup = new Map<number, number[]>();
-    for (const server of servers) {
-      byGroup.set(server.pgid, [
-        ...(byGroup.get(server.pgid) ?? []),
-        server.pid,
-      ]);
-    }
-    for (const [pgid, pids] of byGroup) {
-      if (pids.length > 1) {
-        problems++;
-        console.log(
-          `  DUPLICATE: ${pids.length} servers in client session ${pgid} ` +
-            `(pids ${pids.join(', ')})`
-        );
-      }
+    for (const group of duplicate) {
+      console.log(
+        `  DUPLICATE: ${group.servers.length} servers in client session ` +
+          `${group.pgid} (pids ${group.servers.map((s) => s.pid).join(', ')})`
+      );
     }
   }
 
-  const cached = scanNpxCache();
   console.log('');
+  const cached = scanNpxCache();
   if (cached.length === 0) {
     console.log('npx cache installs: none');
   } else {
@@ -142,21 +122,70 @@ export async function runDoctor(): Promise<number> {
       'npx cache installs (old entries are harmless; npx reuses ' +
         'the pin it was given):'
     );
+    const broken = new Set(brokenCaches);
     for (const install of cached) {
+      const corrupt = broken.has(install.dir)
+        ? '  BROKEN (no package.json)'
+        : '';
       const stale = install.version !== current ? '  (old)' : '';
-      console.log(`  v${install.version.padEnd(12)} ${install.dir}${stale}`);
+      console.log(
+        `  v${install.version.padEnd(12)} ${install.dir}${corrupt}${stale}`
+      );
     }
   }
 
+  let killed: number[] = [];
+  if (fix) {
+    console.log('');
+    // Keep the default age guard: a directory written seconds ago may be a
+    // concurrent npx install, and deleting it would break that launch.
+    for (const dir of repairNpxCache()) {
+      console.log(`  FIXED: removed corrupt npx install ${dir}`);
+    }
+    killed = terminateDuplicateServers(servers);
+    for (const pid of killed) {
+      console.log(`  FIXED: stopped duplicate server pid ${pid}`);
+    }
+  }
+
+  // What still needs a human: a stale surviving server can only change
+  // version by restarting its client; a corrupt cache that repair could not
+  // delete is a permission problem; real duplicates remain only without --fix.
+  const killedSet = new Set(killed);
+  const survivors = servers.filter((server) => !killedSet.has(server.pid));
+  const staleSurvivors = survivors.filter(
+    (server) => serverVersion(server) !== current
+  );
+  const brokenAfter = findBrokenSquireCaches({ minAgeMs: 0 });
+  const duplicatesAfter = duplicateGroups(survivors).length;
+  const problems = staleSurvivors.length + brokenAfter.length + duplicatesAfter;
+
   console.log('');
   if (problems === 0) {
-    console.log('Result: all running servers are on v' + current + '.');
+    console.log(`Result: all running servers are on v${current}.`);
   } else {
-    console.log(
-      `Result: ${problems} problem(s). Restart the Claude sessions that own ` +
-        `the stale or duplicate servers so they relaunch on the installed ` +
-        `pin; the plugin's autoUpdate moves that pin with the plugin.`
-    );
+    if (staleSurvivors.length > 0) {
+      console.log(
+        `Result: ${staleSurvivors.length} running server(s) are not ` +
+          `v${current}. Restart the Claude sessions that own them so they ` +
+          `relaunch on the installed pin; the plugin's autoUpdate moves that ` +
+          `pin with the plugin.`
+      );
+    }
+    if (brokenAfter.length > 0) {
+      console.log(
+        `Result: ${brokenAfter.length} corrupt npx install(s) could not be ` +
+          `removed. Delete them by hand (they will be reinstalled): ` +
+          brokenAfter.join(', ')
+      );
+    }
+    if (duplicatesAfter > 0) {
+      console.log(
+        `Result: ${duplicatesAfter} client session(s) still run two Squire ` +
+          `servers. Rerun with \`squire doctor --fix\` (or remove one Squire ` +
+          `entry) and restart.`
+      );
+    }
   }
   return problems === 0 ? 0 : 1;
 }

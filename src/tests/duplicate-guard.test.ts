@@ -9,8 +9,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test, expect, afterEach } from '@jest/globals';
 import {
+  duplicateGroups,
   findDuplicateSquireServer,
   isSquireServerArgv,
+  type SquireProcess,
 } from '../duplicate-guard.js';
 
 const roots: string[] = [];
@@ -75,6 +77,46 @@ describe('isSquireServerArgv', () => {
       isSquireServerArgv(['npm', 'exec', '@sniffski/squire@1.34.13'])
     ).toBe(false);
     expect(isSquireServerArgv(['node', '/x/other/dist/index.js'])).toBe(false);
+  });
+});
+
+describe('duplicateGroups', () => {
+  const server = (
+    pid: number,
+    pgid: number,
+    startTime: number
+  ): SquireProcess => ({
+    pid,
+    ppid: 1,
+    pgid,
+    startTime,
+    argv: serverArgv('1.34.14'),
+  });
+
+  test('keeps the oldest of each group and lists the rest as surplus', () => {
+    const groups = duplicateGroups([
+      server(300, 100, 200),
+      server(301, 100, 100),
+      server(302, 100, 300),
+      server(400, 101, 100),
+    ]);
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].pgid).toBe(100);
+    expect(groups[0].servers.map((s) => s.pid)).toEqual([301, 300, 302]);
+    expect(groups[0].surplus.map((s) => s.pid)).toEqual([300, 302]);
+  });
+
+  test('a start-time tie is broken by pid', () => {
+    const groups = duplicateGroups([
+      server(300, 100, 100),
+      server(299, 100, 100),
+    ]);
+    expect(groups[0].surplus.map((s) => s.pid)).toEqual([300]);
+  });
+
+  test('no group for a single server', () => {
+    expect(duplicateGroups([server(300, 100, 100)])).toEqual([]);
   });
 });
 

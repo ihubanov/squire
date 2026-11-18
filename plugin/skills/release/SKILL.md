@@ -29,9 +29,9 @@ node -p "require('./plugin/.claude-plugin/plugin.json').version"
 node -p "require('./.claude-plugin/marketplace.json').plugins.find(p=>p.name==='squire').version"
 ```
 
-Both must be equal and both must have been bumped for a plugin change. Bump them in the same commit as the release. `claude plugin tag <path> --dry-run` performs exactly this check (and refuses a mismatch) if you want the tool to confirm it.
+Both must be equal and both must have been bumped for a plugin change. `node scripts/sync-version.mjs` does all of this — the plugin pin in `plugin/.mcp.json`, both plugin versions, and `server.json` — and bumps the plugin patch when the pin moves. Run it after bumping `package.json`; it is idempotent. `claude plugin tag <path> --dry-run` performs the same version check (and refuses a mismatch) if you want the tool to confirm it.
 
-`src/tests/release-pins.test.ts` fails `npm test` when the plugin pin, the two plugin versions, `server.json` or the README's pinned launch commands drift from `package.json`. Update those in the same commit; the release workflow runs the tests before publishing.
+`node scripts/verify-pins.mjs` is the gate: it fails when the plugin pin, the two plugin versions, `server.json`, the launcher wiring or the README/docs pinned launch commands drift from `package.json`. CI and the Release workflow run it; `src/tests/release-pins.test.ts` mirrors it in `npm test`. The Release workflow also runs the sync step and pushes any resulting pin commit to `main` after a successful publish, so a forgotten pin file cannot survive a release. The launch path itself (the cache-repairing shim) is documented in the `mcp-lifecycle` skill.
 
 Then check the tag itself:
 
@@ -85,3 +85,5 @@ Note that npm's CDN makes a fresh version 404 for several minutes after a succes
 | `npm publish` fails auth/`EOTP` | Trusted Publisher (OIDC) binding broken for `@sniffski/squire` — not a missing token | Owner re-binds the Trusted Publisher on npmjs; no local login is needed |
 | Local `npm whoami` says `E401` | Normal; local npm is unrelated to CI publishing | Ignore it — verify with `npm view`, never by logging in |
 | Tag present locally, absent on fork | `git push fork vX.Y.Z` skipped | Push it explicitly |
+| `Verify release pins` fails | A released artifact still disagrees with `package.json` after sync (launcher wiring, a pinned mention, or plugin versions) | Fix the named file and re-push the tag; the `mcp-lifecycle` skill lists the ownership of each pin |
+| MCP starts nowhere / tools missing after an update | A half-installed `_npx/<hash>` (node_modules, no root package.json) — npx dies with ENOENT | The plugin launcher repairs it automatically; otherwise `squire doctor --fix` |
