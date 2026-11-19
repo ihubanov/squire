@@ -26,7 +26,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
@@ -215,6 +215,13 @@ function runNpx(spec, extraArgs) {
       child = spawn('npx', ['-y', spec, ...extraArgs], {
         stdio: ['inherit', 'pipe', 'pipe'],
         env: process.env,
+        // Run npm exec outside the client's project. When the session cwd (or
+        // any ancestor) is a Squire checkout whose package.json name AND
+        // version match the pin, npm exec resolves that local project instead
+        // of fetching from the registry and then dies trying to run a bin it
+        // never linked (`sh: 1: squire: not found`). A temp dir has no such
+        // manifest, so the pinned package is always installed and run.
+        cwd: tmpdir(),
         // Windows resolves npx.cmd through cmd.exe; POSIX needs no shell.
         shell: isWin,
       });
