@@ -67,4 +67,14 @@ Detection reads `/proc`, so server listing is Linux-only and empty elsewhere. Ca
 
 Never publish with a stale pin, and never tell a user to launch the package without an exact `@x.y.z` spec after the name.
 
+### Where a launch-path fix is allowed to live
+
+The launcher, the shim and `doctor` are **source files in this repo**. The copies under `~/.claude-local/plugins/cache/...` and `~/.claude-local/plugins/marketplaces/...` are build outputs of `/plugin update` — patching them fixes one laptop and nothing else, and the next update silently overwrites the patch. Every launcher/shim fix therefore goes: edit the repo → `verify-pins` → commit → tag → Release workflow → `/plugin update`. If a user is blocked *right now*, the honest answer is "plugin `<next>` is being cut", not a hand-edited cache file.
+
+The launcher must spawn `npx` from a **neutral cwd** (`cwd: tmpdir()`). `npm exec` treats a requested package that matches the manifest in the cwd or any ancestor as the *local project* and runs `sh -c '<bin>'` without linking it, so launching with the client's cwd inside a Squire checkout at exactly the pinned version dies with `sh: 1: squire: not found` before any server code runs. This is the failure you see while developing Squire itself, not for normal users.
+
+### The exactly-one rule
+
+A user must end up with **one** Squire server: the plugin. A hand-written `mcpServers` entry with the same name (or a leftover from the pre-plugin `appium-mcp` era) gives a session two copies — duplicated tools, and answers from two different versions. Never document, and never add, a manual entry alongside the plugin; manual `npx` installs are for non-plugin clients that have no plugin at all.
+
 **The pin reaches `main` only after `npm publish` succeeds.** A tag-first release pushes the tag alone; the Release workflow waits for `npm view @sniffski/squire@<new>` to resolve, then fast-forwards `main`. Pushing a version bump to `main` before its tag publishes advertises an unpublishable pin and disconnects every plugin user. `ci.yml` refuses a `main` pin that is not on npm, and the launcher falls back to `latest`, but neither is a substitute for the ordering.
