@@ -13,6 +13,8 @@ The server is not a daemon. Each client session launches its own copy, pinned to
 
 The pin lives in `plugin/.mcp.json` and always equals `package.json`'s version. Updating the plugin is what moves the pin; that is the only supported upgrade path for plugin users.
 
+**End state, by construction:** exactly one MCP registration — the plugin's, named `squire` (`mcp__plugin_squire_squire__*`), launched at the plugin's exact pin and moved by each plugin update. Remove a stale `appium-mcp`/`squire` registration with `claude mcp list`, then `claude mcp remove <name>`. Remove the legacy systemd backend with `scripts/install-backend.sh --uninstall`. Nothing else may install a server.
+
 ## Failure class 1 — a corrupt npx cache
 
 `npx` installs into `~/.npm/_npx/<hash>/` and then trusts that directory. If npm is interrupted mid-install, the directory can contain `node_modules/` but **no root `package.json`**. Every later launch of that spec dies with:
@@ -48,8 +50,11 @@ rm -rf ~/.npm/_npx/<hash>
 A client can be given Squire twice (plugin plus a hand-written `.mcp.json` entry) or keep an old process alive after an upgrade. Two servers in one session expose every tool twice and can answer from different versions.
 
 - On Linux, a new server refuses to start when an older Squire server is already in the same process group (`SQUIRE_ALLOW_MULTIPLE_SERVERS=1` overrides). It is a no-op on macOS/Windows.
-- `squire doctor` lists every live server with its version and every npx install.
-- `squire doctor --fix` stops duplicate servers, keeping the oldest in each client session; it never stops a single stale server, because that session's browser would vanish mid-task. Restart that client instead.
+- On startup a new server also **reaps provably abandoned older-version servers** (`src/stale-reaper.ts`). It signals a server only when every one of these holds: its on-disk version is not the current one, its parent chain has no `claude` ancestor, the chain is readable and reaches init/systemd --user (reparented), it is not in the new server's process group, and its cgroup is not a systemd `.service`.
+- It deliberately leaves alone: a server a live `claude` session still owns (killing it would remove that session's tools mid-task); a **same-version** orphan (the transport guard owns that shutdown, and a race here could kill a client that is still attached); and any systemd-owned `appium-mcp-*`/`squire*` unit (systemd would restart it, so it prints the exact `systemctl --user disable --now ...` command instead). An unreadable `/proc` ancestry or cgroup also means "leave it".
+- `SQUIRE_NO_REAP=1` disables the startup reaper; `SQUIRE_ALLOW_MULTIPLE_SERVERS=1` disables both the duplicate guard and the reaper.
+- `squire doctor` lists every live server with its version, every npx install, and every systemd-owned backend with the disable command.
+- `squire doctor --fix` reaps abandoned stale servers and stops duplicate servers, keeping the oldest in each client session. It never stops a live session's server or a systemd unit; restart that client or retire the unit.
 
 ```sh
 npx @sniffski/squire@<pin> doctor
@@ -57,6 +62,16 @@ npx @sniffski/squire@<pin> doctor --fix
 ```
 
 Detection reads `/proc`, so server listing is Linux-only and empty elsewhere. Cache scanning and repair work on Linux, macOS and Windows.
+
+### Retiring the legacy systemd backend
+
+`scripts/install-backend.sh` used to install `appium-mcp-backend.service`, `appium-mcp.socket` and `appium-mcp.service` — a local `dist/index.js --httpStream` server with no version pin and no upgrade path. Next to the plugin's pinned stdio server that is a second, unversioned MCP. Installing is now opt-in (`--legacy-backend`) and unsupported; retire an existing install with:
+
+```sh
+scripts/install-backend.sh --uninstall
+```
+
+It stops/disables/deletes the three units and the drop-in, reloads systemd and verifies `LoadState=not-found`. It is idempotent and safe when nothing is installed. Never edit unit files or plugin-cache copies by hand — they are build outputs.
 
 ## Failure class 3 — a server that outlives its client
 
@@ -79,7 +94,7 @@ Do not "fix" this by patching a copy under `~/.claude-local/plugins/cache/`; it 
 1. Bump `package.json` with `npm version <x.y.z>` (or edit it and run `node scripts/sync-version.mjs`). This rewrites `server.json`, `plugin/.mcp.json` (pin + shim), and bumps the plugin patch version in `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. Idempotent.
 2. `node scripts/verify-pins.mjs` must pass. It checks the shim launch, the exact pin, plugin/marketplace version agreement, `server.json`, and every pinned mention in README/docs/plugin/examples/scripts.
 3. Tag and push **the tag only** to `fork` (see the `release` skill). `.github/workflows/publish.yml` runs sync + verify before publishing, waits for the new version to resolve on npm, then fast-forwards `main` to the tag commit — so `main` never pins an unpublished version. `.github/workflows/ci.yml` runs verify on every push/PR, refuses a pin that is not on npm, and `npm test` also runs `src/tests/release-pins.test.ts`.
-4. After the release: `npm view @sniffski/squire dist-tags` shows the new `latest`; `/plugin marketplace update squire` (or autoUpdate) pulls the new plugin version and pin; restart the session; `squire doctor` shows only the new version.
+4. After the release: `npm view @sniffski/squire dist-tags` shows the new `latest`; `/plugin marketplace update squire` (or autoUpdate) pulls the new plugin version and pin. Restart one session: the new server reaps abandoned older-version servers on start, and `squire doctor` shows exactly one live server at the new version. A systemd-owned `appium-mcp-*` backend is never reaped — retire it once with `scripts/install-backend.sh --uninstall`.
 
 Never publish with a stale pin, and never tell a user to launch the package without an exact `@x.y.z` spec after the name.
 

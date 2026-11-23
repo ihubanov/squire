@@ -12,6 +12,9 @@
  *   - the plugin must expose exactly one MCP server named squire, installed
  *     from ./plugin, so a user ends up with one server rather than a
  *     plugin-plus-hand-written duplicate;
+ *   - the legacy `scripts/install-backend.sh` stays retired: a bare run exits
+ *     0 without installing a backend, `--legacy-backend` is required to
+ *     install, and no workflow or npm script may invoke it;
  *   - server.json (the MCP registry manifest) must match;
  *   - no published-facing text may point at a different version or an
  *     unpinned server.
@@ -159,6 +162,67 @@ for (const file of publishedFiles()) {
   if (/npx\s+(?:-y\s+)?@sniffski\/squire(?!@)/.test(text)) {
     errors.push(`${file}: launches @sniffski/squire without an exact @version`);
   }
+}
+
+// The legacy shared backend is retired: the plugin's pinned stdio server is
+// the only install path. Nothing in CI or the npm lifecycle may re-enliven it,
+// and the script must keep both its retirement gate and its --uninstall path.
+let backendText = '';
+try {
+  backendText = readFileSync(
+    join(root, 'scripts', 'install-backend.sh'),
+    'utf8'
+  );
+} catch {
+  errors.push(
+    'scripts/install-backend.sh: missing (retirement notice must ship)'
+  );
+}
+if (backendText) {
+  if (!backendText.includes('RETIRED (plugin provides the server)')) {
+    errors.push(
+      'scripts/install-backend.sh: lost the retirement gate; a bare run ' +
+        'must exit 0 without installing a backend'
+    );
+  }
+  if (!/--legacy-backend\)/.test(backendText)) {
+    errors.push(
+      'scripts/install-backend.sh: installing must require --legacy-backend'
+    );
+  }
+  if (!/--uninstall\)/.test(backendText)) {
+    errors.push('scripts/install-backend.sh: --uninstall branch is missing');
+  }
+}
+
+const reEnablers = [];
+if (JSON.stringify(pkg.scripts ?? {}).includes('install-backend')) {
+  reEnablers.push('package.json scripts');
+}
+let workflows = [];
+try {
+  workflows = readdirSync(join(root, '.github', 'workflows')).filter((file) =>
+    /\.ya?ml$/.test(file)
+  );
+} catch {
+  // A partial checkout without workflows is not a release-artifact problem.
+}
+for (const file of workflows) {
+  let text;
+  try {
+    text = readFileSync(join(root, '.github', 'workflows', file), 'utf8');
+  } catch {
+    continue;
+  }
+  if (text.includes('install-backend')) {
+    reEnablers.push(`.github/workflows/${file}`);
+  }
+}
+if (reEnablers.length > 0) {
+  errors.push(
+    'the legacy backend installer is retired but invoked by ' +
+      `${reEnablers.join(', ')}; the plugin is the only install path`
+  );
 }
 
 if (errors.length > 0) {

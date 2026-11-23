@@ -37,6 +37,10 @@ Install Squire **once**. The plugin is already an MCP server registration, so do
 
 Already have a duplicate from an earlier install? `claude mcp list` shows every registration; the plugin's own is named `plugin:squire:squire`. Remove any other `squire` or `appium-mcp` entry with `claude mcp remove <name>` — it removes the entry from whichever scope holds it, or add `-s user|project|local` when you need to name the scope — then restart the session. `squire doctor --fix` stops a live duplicate server, but it cannot edit a client's MCP config for you.
 
+### Updating
+
+Update the plugin (`/plugin marketplace update squire`, or turn on auto-update), then restart the session. The plugin's pin moves with its version, so the restart launches the newly published server. On startup the new server reaps abandoned older-version Squire servers — ones with no live `claude` session ancestor — so an upgrade cleans up after itself. It deliberately leaves alone a server a live session still owns, a same-version server (the transport guard handles that), and any systemd-owned backend: for legacy `appium-mcp-*` units it prints the exact `systemctl --user disable --now ...` command rather than fighting systemd. `squire doctor` lists every live server and flags anything not at the current version; `squire doctor --fix` reaps the abandoned ones and stops duplicate servers within one client session. Retire an old legacy backend for good with `scripts/install-backend.sh --uninstall`. The end state is exactly one MCP server, named `squire`, running the plugin's pin.
+
 ### As a plain MCP server (other MCP clients)
 
 Use this only when you are **not** using the plugin, and pin the exact version. Plain installs do not auto-update: change the pin when a new release ships, then run `squire doctor` to confirm. If a launch dies with `ENOENT .../_npx/<hash>/package.json`, the npx cache is half-installed; `doctor --fix` removes it and the next launch reinstalls.

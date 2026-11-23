@@ -86,6 +86,8 @@ gh release view vX.Y.Z -R ihubanov/squire --json isDraft,isPrerelease
 
 The registry (MCP) entry and the GitHub release are job steps of the same run — if they are missing, the run did not succeed, whatever the dist-tag says.
 
+Then restart one session after `/plugin marketplace update squire`: the new server reaps abandoned older-version servers at startup, and `squire doctor` must show exactly one live server at the new version (a legacy systemd backend is never reaped — retire it with `scripts/install-backend.sh --uninstall`).
+
 Note that npm's CDN makes a fresh version 404 for several minutes after a successful publish; the workflow polls through that lag itself, so a temporary 404 is not evidence of failure.
 
 ## Failure modes and what they mean
