@@ -9,6 +9,9 @@
  *     corrupt npx cache kills the launch;
  *   - plugin.json and the marketplace entry must carry the same version,
  *     because Claude Code resolves plugin updates from the marketplace entry;
+ *   - the plugin must expose exactly one MCP server named squire, installed
+ *     from ./plugin, so a user ends up with one server rather than a
+ *     plugin-plus-hand-written duplicate;
  *   - server.json (the MCP registry manifest) must match;
  *   - no published-facing text may point at a different version or an
  *     unpinned server.
@@ -78,15 +81,42 @@ if (!server) {
   }
 }
 
+// Exactly one server: installers must get one Squire MCP, not the plugin plus
+// a hand-written duplicate.
+const serverNames = Object.keys(mcp.mcpServers ?? {});
+if (serverNames.length !== 1 || serverNames[0] !== 'squire') {
+  errors.push(
+    `plugin/.mcp.json: expected exactly one MCP server named squire, found ${
+      serverNames.length ? serverNames.join(', ') : 'none'
+    }`
+  );
+}
+if (plugin.name !== 'squire') {
+  errors.push(
+    `plugin/.claude-plugin/plugin.json: name ${
+      plugin.name ?? 'missing'
+    } but the marketplace installs the squire plugin`
+  );
+}
+
 // Plugin versions agree (marketplace is authoritative for updates).
 const entry = marketplace.plugins?.find((p) => p.name === 'squire');
 if (!entry) {
   errors.push('.claude-plugin/marketplace.json: no squire plugin entry');
-} else if (entry.version !== plugin.version) {
-  errors.push(
-    `.claude-plugin/marketplace.json: version ${entry.version} but ` +
-      `plugin/.claude-plugin/plugin.json is ${plugin.version}`
-  );
+} else {
+  if (entry.version !== plugin.version) {
+    errors.push(
+      `.claude-plugin/marketplace.json: version ${entry.version} but ` +
+        `plugin/.claude-plugin/plugin.json is ${plugin.version}`
+    );
+  }
+  if (entry.source !== './plugin') {
+    errors.push(
+      `.claude-plugin/marketplace.json: squire source is ${
+        entry.source ?? 'missing'
+      } but must be ./plugin`
+    );
+  }
 }
 if (marketplace.autoUpdate !== true) {
   errors.push('.claude-plugin/marketplace.json: autoUpdate must stay true');
