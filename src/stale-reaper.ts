@@ -331,10 +331,7 @@ export async function reapAbandonedServers(
   const env = options.env ?? process.env;
   // `SQUIRE_ALLOW_MULTIPLE_SERVERS` already means "I want more than one
   // server"; honour that as a full bypass.
-  if (
-    truthy(env.SQUIRE_NO_REAP) ||
-    truthy(env.SQUIRE_ALLOW_MULTIPLE_SERVERS)
-  ) {
+  if (truthy(env.SQUIRE_NO_REAP) || truthy(env.SQUIRE_ALLOW_MULTIPLE_SERVERS)) {
     return empty;
   }
 
