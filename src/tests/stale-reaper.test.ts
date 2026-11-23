@@ -83,6 +83,12 @@ function writeClaude(root: string, pid: number): void {
   });
 }
 
+/** The next patch release after `version`, i.e. a newer orphan. */
+function nextVersion(version: string): string {
+  const [major, minor, patch] = version.split('.').map(Number);
+  return `${major}.${minor}.${patch + 1}`;
+}
+
 interface SignalCall {
   pid: number;
   signal: NodeJS.Signals;
@@ -153,6 +159,23 @@ describe('listReapableServers', () => {
     expect(plan.candidates).toEqual([]);
     expect(plan.skipped.find((s) => s.pid === 300)?.reason).toBe(
       'current version'
+    );
+  });
+
+  test('a newer orphan is never reaped', () => {
+    const root = procRoot();
+    const script = makeInstall(root, nextVersion(CURRENT_VERSION));
+    writeProc(root, 300, { ppid: 1, pgid: 300, argv: ['node', script] });
+
+    const plan = listReapableServers({
+      procRoot: root,
+      selfPid: 999,
+      selfPgid: 999,
+    });
+
+    expect(plan.candidates).toEqual([]);
+    expect(plan.skipped.find((s) => s.pid === 300)?.reason).toBe(
+      'newer than current'
     );
   });
 

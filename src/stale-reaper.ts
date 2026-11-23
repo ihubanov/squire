@@ -8,7 +8,9 @@
  *
  * This module stops only servers it can *prove* are abandoned:
  *
- *   - an older version (`versionForScript` says it is not CURRENT_VERSION);
+ *   - strictly older than CURRENT_VERSION (`versionForScript`; a newer orphan
+ *     is left alone — an old server running the reaper must not remove its
+ *     replacement);
  *   - no ancestor process named `claude` — a live session owns it, so leave it;
  *   - the parent chain is readable and reaches init / systemd --user, i.e. it
  *     was reparented rather than still attached to a client;
@@ -144,6 +146,35 @@ function installedVersion(proc: SquireProcess): string | null {
   return script ? versionForScript(script) : null;
 }
 
+/**
+ * True when `version` is a valid `x.y.z` strictly older than CURRENT_VERSION.
+ * A newer orphan is never reaped: an older server can be the one running this
+ * reaper, and it must not remove the newer server that replaced it.
+ */
+function isOlderVersion(version: string): boolean {
+  const parse = (value: string): number[] | null => {
+    const parts = value.split('.').map(Number);
+    if (parts.length !== 3) {
+      return null;
+    }
+    if (!parts.every((part) => Number.isInteger(part))) {
+      return null;
+    }
+    return parts;
+  };
+  const candidate = parse(version);
+  const current = parse(CURRENT_VERSION);
+  if (!candidate || !current) {
+    return false;
+  }
+  for (let i = 0; i < 3; i++) {
+    if (candidate[i] !== current[i]) {
+      return candidate[i] < current[i];
+    }
+  }
+  return false;
+}
+
 interface Abandonment {
   abandoned: boolean;
   reason: string;
@@ -242,6 +273,14 @@ export function listReapableServers(options: ReaperOptions = {}): ReapPlan {
         pid: server.pid,
         version,
         reason: 'current version',
+      });
+      continue;
+    }
+    if (!isOlderVersion(version)) {
+      plan.skipped.push({
+        pid: server.pid,
+        version,
+        reason: 'newer than current',
       });
       continue;
     }
