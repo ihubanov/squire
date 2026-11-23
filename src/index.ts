@@ -4,6 +4,7 @@ import log from './logger.js';
 import { runDoctor, CURRENT_VERSION } from './doctor.js';
 import { refuseIfDuplicateSquireServer } from './duplicate-guard.js';
 import { repairNpxCache } from './npx-cache.js';
+import { reapAbandonedServers } from './stale-reaper.js';
 import { installStdioGuards, isTransportError } from './transport-guard.js';
 
 // Parse command line arguments
@@ -133,6 +134,18 @@ async function main(): Promise<void> {
   // The plugin and a hand-written `.mcp.json` entry would otherwise load two
   // servers, with every tool twice. Keep one per client session.
   refuseIfDuplicateSquireServer();
+
+  // A new release must not leave older servers running from dead sessions.
+  // Fire-and-forget: the scan is synchronous but the graceful stop waits up
+  // to ~2s, and none of that may delay or break startup. It only touches
+  // provably abandoned, older-version servers (see stale-reaper.ts).
+  void reapAbandonedServers().catch((error) => {
+    try {
+      log.warn('stale-server reaper failed (continuing):', error);
+    } catch {
+      // Never let housekeeping take down the server.
+    }
+  });
 
   await startServer();
 }

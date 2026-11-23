@@ -5,10 +5,11 @@
  * Read-only by default: it never kills a process and never deletes a cache
  * directory, because a server may belong to a live session that is still
  * working. `squire doctor --fix` is the explicit opt-in: it removes corrupt
- * npx cache entries (so the next launch can reinstall) and stops duplicate
- * servers, keeping the oldest in each client session. It still never touches
- * a single stale server — that session's browser would vanish mid-task; it
- * reports it so the client can be restarted instead.
+ * npx cache entries (so the next launch can reinstall), reaps abandoned
+ * older-version servers, and stops duplicate servers, keeping the oldest in
+ * each client session. It never kills a server that a live session or a
+ * systemd unit owns; systemd-owned backends are reported with the exact
+ * `systemctl --user disable --now` command instead.
  */
 import { readFileSync, realpathSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -89,6 +90,11 @@ export async function runDoctor(
   const brokenCaches = findBrokenSquireCaches({ minAgeMs: 0 });
   const duplicate = duplicateGroups(servers);
 
+  // The reaper imports THIS module for CURRENT_VERSION and versionForScript,
+  // so load it dynamically: the dependency stays one-way at module init.
+  const staleReaper = await import('./stale-reaper.js');
+  const reapPlan = staleReaper.listReapableServers();
+
   console.log(`Squire doctor${fix ? ' --fix' : ''}`);
   console.log(`  this CLI: v${current} (${process.platform})`);
   console.log('');
@@ -113,6 +119,10 @@ export async function runDoctor(
     }
   }
 
+  for (const line of staleReaper.reportSystemdBackends(reapPlan.systemd)) {
+    console.log(`  SYSTEMD: ${line}`);
+  }
+
   console.log('');
   const cached = scanNpxCache();
   if (cached.length === 0) {
@@ -135,12 +145,23 @@ export async function runDoctor(
   }
 
   let killed: number[] = [];
+  let reaped: Array<{ pid: number; version: string }> = [];
   if (fix) {
     console.log('');
     // Keep the default age guard: a directory written seconds ago may be a
     // concurrent npx install, and deleting it would break that launch.
     for (const dir of repairNpxCache()) {
       console.log(`  FIXED: removed corrupt npx install ${dir}`);
+    }
+    // The reaper already logs its own lines at startup; here the doctor owns
+    // the report, so run it quiet and print the outcome.
+    const reapReport = await staleReaper.reapAbandonedServers({ quiet: true });
+    reaped = reapReport.reaped;
+    for (const server of reapReport.reaped) {
+      console.log(
+        `  FIXED: reaped abandoned stale server pid ${server.pid} ` +
+          `(v${server.version})`
+      );
     }
     killed = terminateDuplicateServers(servers);
     for (const pid of killed) {
@@ -150,15 +171,25 @@ export async function runDoctor(
 
   // What still needs a human: a stale surviving server can only change
   // version by restarting its client; a corrupt cache that repair could not
-  // delete is a permission problem; real duplicates remain only without --fix.
-  const killedSet = new Set(killed);
-  const survivors = servers.filter((server) => !killedSet.has(server.pid));
+  // delete is a permission problem; real duplicates remain only without --fix;
+  // a systemd-owned backend must be retired explicitly.
+  const removedSet = new Set<number>([
+    ...killed,
+    ...reaped.map((server) => server.pid),
+  ]);
+  const survivors = servers.filter((server) => !removedSet.has(server.pid));
+  const systemdPids = new Set(reapPlan.systemd.map((server) => server.pid));
   const staleSurvivors = survivors.filter(
-    (server) => serverVersion(server) !== current
+    (server) =>
+      !systemdPids.has(server.pid) && serverVersion(server) !== current
   );
   const brokenAfter = findBrokenSquireCaches({ minAgeMs: 0 });
   const duplicatesAfter = duplicateGroups(survivors).length;
-  const problems = staleSurvivors.length + brokenAfter.length + duplicatesAfter;
+  const problems =
+    staleSurvivors.length +
+    brokenAfter.length +
+    duplicatesAfter +
+    reapPlan.systemd.length;
 
   console.log('');
   if (problems === 0) {
@@ -167,9 +198,18 @@ export async function runDoctor(
     if (staleSurvivors.length > 0) {
       console.log(
         `Result: ${staleSurvivors.length} running server(s) are not ` +
-          `v${current}. Restart the Claude sessions that own them so they ` +
-          `relaunch on the installed pin; the plugin's autoUpdate moves that ` +
-          `pin with the plugin.`
+          `v${current}. A live session's server changes version only when ` +
+          `that session restarts; \`squire doctor --fix\` reaps abandoned ` +
+          `stale servers but never kills one owned by a live session or a ` +
+          `systemd unit.`
+      );
+    }
+    if (reapPlan.systemd.length > 0) {
+      console.log(
+        `Result: ${reapPlan.systemd.length} systemd-owned Squire server(s) ` +
+          `will never upgrade on their own. Retire the legacy backend with: ` +
+          '`systemctl --user disable --now appium-mcp-backend.service ' +
+          'appium-mcp.socket appium-mcp.service`'
       );
     }
     if (brokenAfter.length > 0) {

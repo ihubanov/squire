@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 #
-# install-backend.sh — provision the appium-mcp web-driving backend on a
-# fresh machine (or re-provision after moving the repo). Idempotent,
-# non-root, systemd USER units only. What it does:
+# install-backend.sh — RETIRED installer for the legacy shared appium-mcp
+# HTTP backend.
 #
-#   1. sanity checks (user session, node >= 20, systemd --user works)
-#   2. npm ci + build (dist/)
-#   3. installs three user units:
-#        appium-mcp-backend.service  — node dist/index.js --httpStream :18766
-#        appium-mcp.socket           — stable listener on 127.0.0.1:8766
-#        appium-mcp.service          — socket proxy 8766 -> 18766
-#   4. optional drop-in env overrides (--cdp-endpoint, --cdp-required,
-#      --with-vision)
-#   5. enables + starts everything, then health-checks the SSE endpoint
-#      with a real MCP initialize handshake through the proxy port.
+# The supported path is the Squire Claude Code plugin: it launches a pinned
+# stdio server (@sniffski/squire@<version>) and moves that pin with the
+# plugin. This script instead builds a local dist/ and installs systemd USER
+# units that run it over httpStream — no version pin, no upgrade path. On a
+# machine that also has the plugin it is a second, unbounded MCP server.
 #
-# Existing units are NEVER clobbered without --force (this box's hand-tuned
-# overrides — vision env, focus-guard kill switch — live on as drop-ins
-# and survive reinstalls).
+# Running with no flags therefore prints the retirement notice and exits 0,
+# so claude-local's first-run `--quiet` auto-install stops creating those
+# units without being treated as a failure.
 #
 # Options:
+#   --uninstall         stop + disable + delete the three legacy user units
+#                       (idempotent; safe on a machine with none installed)
+#   --legacy-backend    actually install/refresh the legacy backend. The units
+#                       are: appium-mcp-backend.service (node dist/index.js
+#                       --httpStream :18766), appium-mcp.socket (listener on
+#                       127.0.0.1:8766) and appium-mcp.service (proxy).
+#                       Unsupported: no version pin.
 #   --port N            backend port          (default 18766)
 #   --proxy-port N      stable proxy port     (default 8766)
 #   --cdp-endpoint URL  attach to a shared Chromium (herdr-share gate, the
@@ -30,8 +31,8 @@
 #                       OmniParser icon-detect weights (needs python3.11)
 #   --with-chromium     install Playwright's chromium for detached mode
 #   --quiet             fire-and-forget: all output to --log-file, silent
-#                       terminal, machine-readable exit (0=installed+healthy,
-#                       1=failed); final log line is always "RESULT: ..."
+#                       terminal, machine-readable exit (0=ok, 1=failed);
+#                       final log line is always "RESULT: ..."
 #   --log-file PATH     where --quiet logs (default
 #                       $XDG_CACHE_HOME/appium-mcp/install-backend.log)
 #   --force             overwrite existing unit files (drop-ins are kept)
@@ -43,6 +44,7 @@ BACKEND_PORT="${APPIUM_MCP_BACKEND_PORT:-18766}"
 PROXY_PORT="${APPIUM_MCP_PROXY_PORT:-8766}"
 UNITS_DIR="$HOME/.config/systemd/user"
 FORCE=0 WITH_VISION=0 WITH_CHROMIUM=0 CDP_REQUIRED=0 QUIET=0
+LEGACY=0 UNINSTALL=0
 CDP_ENDPOINT=""
 LOG_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/appium-mcp/install-backend.log"
 
@@ -57,6 +59,8 @@ while [ $# -gt 0 ]; do
     --quiet) QUIET=1; shift ;;
     --log-file) LOG_FILE="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
+    --legacy-backend) LEGACY=1; shift ;;
+    --uninstall) UNINSTALL=1; shift ;;
     -h|--help) grep '^# \{0,1\}' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
   esac
@@ -77,6 +81,61 @@ trap 'result "FAILED (see lines above)"; exit 1' ERR
 
 step() { printf '\n==> %s\n' "$*"; }
 die()  { echo "ERROR: $*" >&2; result "FAILED — $*"; exit 1; }
+
+# Retire the legacy units. Idempotent: succeeds on a machine with none.
+uninstall_units() {
+  step "Retiring legacy appium-mcp systemd units"
+  systemctl --user disable --now \
+    appium-mcp.socket appium-mcp.service appium-mcp-backend.service \
+    2>/dev/null || true
+  # The proxy is static, so `disable` alone may not stop it.
+  systemctl --user stop \
+    appium-mcp.socket appium-mcp.service appium-mcp-backend.service \
+    2>/dev/null || true
+  rm -f "$UNITS_DIR/appium-mcp.socket" \
+        "$UNITS_DIR/appium-mcp.service" \
+        "$UNITS_DIR/appium-mcp-backend.service"
+  rm -rf "$UNITS_DIR/appium-mcp-backend.service.d"
+  rm -f "$UNITS_DIR/sockets.target.wants/appium-mcp.socket" \
+        "$UNITS_DIR/default.target.wants/appium-mcp-backend.service"
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user reset-failed 2>/dev/null || true
+
+  local lingering=0 unit state
+  for unit in appium-mcp.socket appium-mcp.service appium-mcp-backend.service; do
+    state="$(systemctl --user show "$unit" -p LoadState --value 2>/dev/null || true)"
+    if [ -n "$state" ] && [ "$state" != "not-found" ]; then
+      echo "  WARNING: $unit is still LoadState=$state"
+      lingering=1
+    fi
+  done
+  if [ "$lingering" = 0 ]; then
+    result "UNINSTALLED"
+    return 0
+  fi
+  result "FAILED — legacy units are still loaded"
+  return 1
+}
+
+if [ "$UNINSTALL" = 1 ]; then
+  uninstall_units || exit $?
+  exit 0
+fi
+
+# The plugin is the supported path. Do not create a second, unversioned
+# server unless the caller explicitly asks for the legacy backend.
+if [ "$LEGACY" != 1 ]; then
+  echo "RETIRED: install-backend.sh no longer provisions a backend by default."
+  echo "The Squire plugin launches a pinned stdio MCP server and updates it with the plugin."
+  echo "A local-build httpStream backend has no version pin and never upgrades, so it becomes"
+  echo "a second, stale MCP next to the plugin's server."
+  echo "  - retire an existing install: $0 --uninstall"
+  echo "  - rebuild the legacy shared backend anyway (unsupported): $0 --legacy-backend"
+  result "RETIRED (plugin provides the server)"
+  exit 0
+fi
+
+step "Legacy backend selected (unsupported: no version pin)"
 
 [ "$(id -u)" -ne 0 ] || die "run as your normal user — everything here is user-level"
 step "Sanity checks"
