@@ -4,6 +4,20 @@ import log from './logger.js';
 import { runDoctor, CURRENT_VERSION } from './doctor.js';
 import { refuseIfDuplicateSquireServer } from './duplicate-guard.js';
 import { repairNpxCache } from './npx-cache.js';
+import { installStdioGuards, isTransportError } from './transport-guard.js';
+
+// Parse command line arguments
+const args = process.argv.slice(2);
+const useHttpStream = args.includes('--httpStream');
+const port =
+  args.find((arg) => arg.startsWith('--port='))?.split('=')[1] || '8080';
+
+// A dead client must not be able to make us spin. See transport-guard.ts for
+// the orphaned-server incident this prevents.
+const onTransportError = installStdioGuards({
+  useHttpStream,
+  onClientGone: () => process.kill(process.pid, 'SIGTERM'),
+});
 
 // Playwright and the CDP relay throw from inside event handlers when a
 // browser sends something the bundled Playwright build does not expect (e.g.
@@ -12,18 +26,33 @@ import { repairNpxCache } from './npx-cache.js';
 // Those throws are not fatal to our state: the target is simply skipped.
 // Log and keep serving instead of letting the process die and take every
 // session's transport with it.
+//
+// The one exception is a transport error: logging it would write to the same
+// dead stream that raised it, so hand it to the stdio guard instead. The
+// `reportingFatal` latch stops a synchronous throw inside `log.error` from
+// re-entering this handler.
+let reportingFatal = false;
+function reportFatal(message: string, detail: unknown): void {
+  if (isTransportError(detail)) {
+    onTransportError(detail);
+    return;
+  }
+  if (reportingFatal) {
+    return;
+  }
+  reportingFatal = true;
+  try {
+    log.error(message, detail);
+  } finally {
+    reportingFatal = false;
+  }
+}
 process.on('uncaughtException', (err) => {
-  log.error('Uncaught exception (server kept alive):', err);
+  reportFatal('Uncaught exception (server kept alive):', err);
 });
 process.on('unhandledRejection', (reason) => {
-  log.error('Unhandled rejection (server kept alive):', reason);
+  reportFatal('Unhandled rejection (server kept alive):', reason);
 });
-
-// Parse command line arguments
-const args = process.argv.slice(2);
-const useHttpStream = args.includes('--httpStream');
-const port =
-  args.find((arg) => arg.startsWith('--port='))?.split('=')[1] || '8080';
 
 async function startServer(): Promise<void> {
   // Load the server and its heavy dependencies only when actually serving;
@@ -47,6 +76,15 @@ async function startServer(): Promise<void> {
       );
       log.info('Waiting for client connections...');
     } else {
+      // The client is gone when stdin ends, closes, or errors. Exit (through
+      // the SIGTERM cleanup) instead of lingering and holding browser
+      // connections. Armed before start() so the first broken transport write
+      // cannot race it — a lost race is how the orphaned server survived.
+      const onClientGone = () => process.kill(process.pid, 'SIGTERM');
+      process.stdin.on('end', onClientGone);
+      process.stdin.on('close', onClientGone);
+      process.stdin.on('error', onClientGone);
+
       // Start with stdio transport
       server.start({
         transportType: 'stdio',
@@ -54,9 +92,6 @@ async function startServer(): Promise<void> {
 
       log.info('Server started with stdio transport');
       log.info('Waiting for client connections...');
-      // The client is gone when stdin closes. Exit (through the SIGTERM
-      // cleanup) instead of lingering and holding browser connections.
-      process.stdin.on('end', () => process.kill(process.pid, 'SIGTERM'));
     }
   } catch (error: any) {
     log.error('Error starting server:', error);

@@ -58,6 +58,22 @@ npx @sniffski/squire@<pin> doctor --fix
 
 Detection reads `/proc`, so server listing is Linux-only and empty elsewhere. Cache scanning and repair work on Linux, macOS and Windows.
 
+## Failure class 3 — a server that outlives its client
+
+A stdio server whose client disappears must **exit**. If it does not, it burns a whole core for days and nobody notices until the machine is slow.
+
+The signature: `PPID 1` (reparented to systemd --user), `STAT Rl`, ~99–100% CPU, no TCP sockets, `ss -lxnp` shows no listener, and `process.stdin` fds are socketpairs with no peer. Confirm with `/proc/<pid>/io`: `syscw` climbs ~3,000/s while `write_bytes` stays 0 — writes that deliver nothing. `kill -9`, not `kill`: SIGTERM reaches the same dead stream.
+
+Why it spins: the client's end of the socketpair is closed, so the next write fails `EPIPE` (SIGPIPE is ignored, so Node emits `'error'` instead). With no `'error'` listener that becomes an `uncaughtException`, and an `uncaughtException` handler that calls `log.error` writes to the **same dead stderr** — re-entering itself forever. Real incident: PID 3926556, 1.34.16, 3.6 days at 99.6%, needed SIGKILL.
+
+The rules that keep it fixed (`src/transport-guard.ts`, tested in `src/tests/transport-guard.test.ts`):
+
+- `stdout`/`stderr` carry an `'error'` listener that ends the process through the normal SIGTERM shutdown. An httpStream server swallows instead — it still serves over TCP, and a dead log sink must not take it down.
+- The `uncaughtException`/`unhandledRejection` keep-alive handlers stay (they exist for Playwright/CDP throws), but they hand transport errors to that guard and never log them.
+- Client-gone detection covers stdin `'end'`, `'close'` and `'error'`, and is armed **before** `server.start()` — losing that race is how the orphaned server survived.
+
+Do not "fix" this by patching a copy under `~/.claude-local/plugins/cache/`; it is a source change that ships through the release workflow like any other.
+
 ## Shipping a version (maintainer)
 
 1. Bump `package.json` with `npm version <x.y.z>` (or edit it and run `node scripts/sync-version.mjs`). This rewrites `server.json`, `plugin/.mcp.json` (pin + shim), and bumps the plugin patch version in `plugin/.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json`. Idempotent.
